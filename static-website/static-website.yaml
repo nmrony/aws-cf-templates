@@ -23,6 +23,7 @@ Metadata:
       - ParentZoneStack
       - ParentAlertStack
       - ParentS3StackAccessLog
+      - ParentWAFStack
     - Label:
         default: 'Lambda@Edge Parameters'
       Parameters:
@@ -35,6 +36,7 @@ Metadata:
       Parameters:
       - DefaultRootObject
       - DefaultErrorPagePath
+      - DefaultErrorResponseCode
     - Label:
         default: 'DNS Parameters'
       Parameters:
@@ -56,6 +58,10 @@ Parameters:
     Default: ''
   ParentS3StackAccessLog:
     Description: 'Optional stack name of parent s3 stack based on state/s3.yaml template (with Access set to ElbAccessLogWrite) to store access logs.'
+    Type: String
+    Default: ''
+  ParentWAFStack:
+    Description: 'Optional stack name of parent WAF stack based on the security/waf.yaml template.'
     Type: String
     Default: ''
   SubDomainNameWithDot:
@@ -86,13 +92,18 @@ Parameters:
     Description: 'Optional path of the error page for the website (e.g. /error.html).'
     Type: String
     Default: ''
+  DefaultErrorResponseCode:
+    Description: 'The HTTP status code that you want to return along with the error page (requires DefaultErrorPagePath).'
+    Type: String
+    Default: '404'
+    AllowedValues: ['200', '404']
   EnableRedirectSubDomainName:
-    Description: 'Sometimes, you want one (sub)domain to redirect to the primary name. E.g., if your primary website is www.widdix.net, you want widdix.net to redirect to www.widdix.net.'
+    Description: 'Deprecated since v12. Will be removed in v14. Use static-website/lambdaedge-index-document instead.'
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
   RedirectSubDomainNameWithDot:
-    Description: 'Optional name that is used to create the DNS entry with trailing dot, e.g. §{RedirectSubDomainNameWithDot}§{HostedZoneName}. Leave blank for naked (or apex and bare) domain.'
+    Description: 'Deprecated since v12. Will be removed in v14. Use static-website/lambdaedge-index-document instead.'
     Type: String
     Default: ''
   CertificateType:
@@ -109,6 +120,7 @@ Parameters:
     Default: ''
 Conditions:
   HasS3Bucket: !Not [!Equals [!Ref ParentS3StackAccessLog, '']]
+  HasWAF: !Not [!Equals [!Ref ParentWAFStack, '']]
   HasRedirectDomainName: !Equals [!Ref EnableRedirectSubDomainName, 'true']
   HasAcmCertificateArn: !Equals [!Ref CertificateType, 'AcmCertificateArn']
   HasIamCertificateId: !Equals [!Ref CertificateType, 'IamCertificateId']
@@ -137,26 +149,17 @@ Resources:
           - '${SubDomainNameWithDot}${HostedZoneName}'
           - SubDomainNameWithDot: !Ref SubDomainNameWithDot
             HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
-          ValidationDomain: !Sub
-          - '${SubDomainNameWithDot}${HostedZoneName}'
-          - SubDomainNameWithDot: !Ref SubDomainNameWithDot
-            HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+          HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
         - DomainName: !Sub
           - '${RedirectSubDomainNameWithDot}${HostedZoneName}'
           - RedirectSubDomainNameWithDot: !Ref RedirectSubDomainNameWithDot
             HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
-          ValidationDomain: !Sub
-          - '${SubDomainNameWithDot}${HostedZoneName}'
-          - SubDomainNameWithDot: !Ref SubDomainNameWithDot
-            HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+          HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
       - - DomainName: !Sub
           - '${SubDomainNameWithDot}${HostedZoneName}'
           - SubDomainNameWithDot: !Ref SubDomainNameWithDot
             HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
-          ValidationDomain: !Sub
-          - '${SubDomainNameWithDot}${HostedZoneName}'
-          - SubDomainNameWithDot: !Ref SubDomainNameWithDot
-            HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+          HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
       SubjectAlternativeNames: !If
       - HasRedirectDomainName
       - - !Sub
@@ -164,6 +167,7 @@ Resources:
           - RedirectSubDomainNameWithDot: !Ref RedirectSubDomainNameWithDot
             HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       - []
+      ValidationMethod: DNS
   S3Bucket:
     Type: 'AWS::S3::Bucket'
     Properties:
@@ -182,6 +186,16 @@ Resources:
           Resource: !Sub 'arn:aws:s3:::${S3Bucket}/*'
           Principal:
             CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+        - Sid: AllowSSLRequestsOnly # AWS Foundational Security Best Practices v1.0.0 S3.5
+          Effect: Deny
+          Principal: '*'
+          Action: 's3:*'
+          Resource:
+          - !GetAtt 'S3Bucket.Arn'
+          - !Sub '${S3Bucket.Arn}/*'
+          Condition:
+            Bool:
+              'aws:SecureTransport': false
   CloudFrontOriginAccessIdentity:
     Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
     Properties:
@@ -214,8 +228,8 @@ Resources:
           HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
         CustomErrorResponses: !If
         - HasDefaultErrorPagePath
-        - - ErrorCode: 403 # not found
-            ResponseCode: 404
+        - - ErrorCode: 403 # 403 from S3 indicates that the file does not exists
+            ResponseCode: !Ref DefaultErrorResponseCode
             ResponsePagePath: !Ref DefaultErrorPagePath
         - []
         DefaultCacheBehavior:
@@ -245,9 +259,10 @@ Resources:
         DefaultRootObject: !If [HasDefaultRootObject, !Ref DefaultRootObject, !Ref 'AWS::NoValue']
         Enabled: true
         HttpVersion: http2
+        IPV6Enabled: true
         Logging: !If [HasS3Bucket, {Bucket: {'Fn::ImportValue': !Sub '${ParentS3StackAccessLog}-BucketDomainName'}, Prefix: !Ref 'AWS::StackName'}, !Ref 'AWS::NoValue']
         Origins:
-        - DomainName: !GetAtt 'S3Bucket.DomainName'
+        - DomainName: !GetAtt 'S3Bucket.RegionalDomainName'
           Id: s3origin
           S3OriginConfig:
             OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}'
@@ -257,6 +272,10 @@ Resources:
           IamCertificateId: !If [HasIamCertificateId, !Ref ExistingCertificate, !Ref 'AWS::NoValue']
           MinimumProtocolVersion: 'TLSv1.1_2016'
           SslSupportMethod: 'sni-only'
+        WebACLId: !If
+        - HasWAF
+        - {'Fn::ImportValue': !Sub '${ParentWAFStack}-WebACL'}
+        - !Ref 'AWS::NoValue'
   Route53RecordV2:
     Type: 'AWS::Route53::RecordSetGroup'
     Properties:
@@ -267,6 +286,19 @@ Resources:
         - SubDomainNameWithDot: !Ref SubDomainNameWithDot
           HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
         Type: A
+        AliasTarget:
+          HostedZoneId: Z2FDTNDATAQYW2 # Magic CloudFront number
+          DNSName: !GetAtt 'CloudFrontDistribution.DomainName'
+  Route53RecordIPv6:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      RecordSets:
+      - Name: !Sub
+        - '${SubDomainNameWithDot}${HostedZoneName}'
+        - SubDomainNameWithDot: !Ref SubDomainNameWithDot
+          HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+        Type: AAAA
         AliasTarget:
           HostedZoneId: Z2FDTNDATAQYW2 # Magic CloudFront number
           DNSName: !GetAtt 'CloudFrontDistribution.DomainName'
@@ -281,6 +313,20 @@ Resources:
         - RedirectSubDomainNameWithDot: !Ref RedirectSubDomainNameWithDot
           HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
         Type: A
+        AliasTarget:
+          HostedZoneId: Z2FDTNDATAQYW2 # Magic CloudFront number
+          DNSName: !GetAtt 'CloudFrontDistribution.DomainName'
+  Route53RecordRedirectIPv6:
+    Condition: HasRedirectDomainName
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      RecordSets:
+      - Name: !Sub
+        - '${RedirectSubDomainNameWithDot}${HostedZoneName}'
+        - RedirectSubDomainNameWithDot: !Ref RedirectSubDomainNameWithDot
+          HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+        Type: AAAA
         AliasTarget:
           HostedZoneId: Z2FDTNDATAQYW2 # Magic CloudFront number
           DNSName: !GetAtt 'CloudFrontDistribution.DomainName'

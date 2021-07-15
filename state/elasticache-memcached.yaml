@@ -36,6 +36,10 @@ Metadata:
         default: 'Operational Parameters'
       Parameters:
       - LogsRetentionInDays
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -55,11 +59,17 @@ Parameters:
     Description: 'Optional but recommended stack name of parent alert stack based on operations/alert.yaml template.'
     Type: String
     Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
+    Type: String
+    Default: ''
   EngineVersion:
     Description: 'memcached version'
     Type: String
     Default: '1.4.34'
     AllowedValues: # aws elasticache describe-cache-engine-versions --engine memcached --query "CacheEngineVersions[].EngineVersion"
+    - '1.6.6'
+    - '1.5.16'
     - '1.5.10'
     - '1.4.5'
     - '1.4.34'
@@ -88,7 +98,12 @@ Mappings:
       CacheParameterGroupFamily: 'memcached1.4'
     '1.5.10':
       CacheParameterGroupFamily: 'memcached1.5'
+    '1.5.16':
+      CacheParameterGroupFamily: 'memcached1.5'
+    '1.6.6':
+      CacheParameterGroupFamily: 'memcached1.6'
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
   HasSSHBastionSecurityGroup: !Not [!Equals [!Ref ParentSSHBastionStack, '']]
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
@@ -105,7 +120,7 @@ Resources:
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       ResourceRecords:
       - !GetAtt 'CacheCluster.ConfigurationEndpoint.Address'
-      TTL: '60'
+      TTL: 60
       Type: CNAME
   CacheParameterGroupName:
     Type: 'AWS::ElastiCache::ParameterGroup'
@@ -222,6 +237,7 @@ Resources:
           Principal:
             Service: 'lambda.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
   CustomResourceLambdaPolicy:
     Type: 'AWS::IAM::Policy'
     Properties:
@@ -241,7 +257,7 @@ Resources:
       Code:
         ZipFile: |
           'use strict';
-          const response = require('./cfn-response');
+          const response = require('cfn-response');
           exports.handler = (event, context, cb) => {
             const nodes = parseInt(event.ResourceProperties.NumCacheNodes, 10);
             const azs = event.ResourceProperties.AvailabilityZones.split(',');
@@ -253,7 +269,7 @@ Resources:
       Handler: 'index.handler'
       MemorySize: 128
       Role: !GetAtt 'CustomResourceLambdaRole.Arn'
-      Runtime: 'nodejs10.x'
+      Runtime: 'nodejs12.x'
       Timeout: 60
   CustomResourceLambdaLogGroup:
     Type: 'AWS::Logs::LogGroup'
@@ -290,3 +306,8 @@ Outputs:
     Value: !GetAtt 'CacheCluster.ConfigurationEndpoint.Address'
     Export:
       Name: !Sub '${AWS::StackName}-DNSName'
+  SecurityGroupId:
+    Description: 'The security group used to manage access to Elasticache Memcached.'
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'

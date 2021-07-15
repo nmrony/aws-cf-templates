@@ -26,6 +26,7 @@ Metadata:
       - ParentAlertStack
       - ParentS3StackAccessLog
       - ParentZoneStack
+      - ParentWAFStack
     - Label:
         default: 'Domain Name and SSL certificates'
       Parameters:
@@ -64,6 +65,10 @@ Metadata:
         default: 'Load Balancer Parameters'
       Parameters:
       - LoadBalancerIdleTimeout
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -87,6 +92,14 @@ Parameters:
   ParentZoneStack:
     Description: 'Stack name of parent zone stack based on vpc/zone-*.yaml template.'
     Type: String
+  ParentWAFStack:
+    Description: 'Optional stack name of parent WAF stack based on the security/waf.yaml template.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
+    Type: String
+    Default: ''
   CloudFrontAcmCertificate:
     Description: 'The ACM Certificate ARN for the CloudFront distribution. Must be created in the us-east-1 region!'
     Type: String
@@ -131,7 +144,7 @@ Parameters:
   WebServerInstanceType:
     Description: 'The instance type of web servers (e.g. t2.micro).'
     Type: String
-    Default: 't2.micro'
+    Default: 't3.micro'
   WebServerLogsRetentionInDays:
     Description: 'Specifies the number of days you want to retain log events.'
     Type: Number
@@ -156,9 +169,46 @@ Parameters:
     Type: String
     Default: 'cron(0 5 ? * * *)'
   DBServerInstanceType:
-    Description: 'The instance type of database server (e.g. db.t2.micro).'
+    Description: 'The instance type of database server (e.g. db.t3.micro).'
     Type: String
-    Default: 'db.t2.micro'
+    Default: 'db.t3.micro'
+    AllowedValues:
+    - 'db.t3.micro'
+    - 'db.t3.small'
+    - 'db.t3.medium'
+    - 'db.t3.large'
+    - 'db.t3.xlarge'
+    - 'db.t3.2xlarge'
+    - 'db.m6g.large'
+    - 'db.m6g.xlarge'
+    - 'db.m6g.2xlarge'
+    - 'db.m6g.4xlarge'
+    - 'db.m6g.8xlarge'
+    - 'db.m6g.12xlarge'
+    - 'db.m6g.16xlarge'
+    - 'db.m5.large'
+    - 'db.m5.xlarge'
+    - 'db.m5.2xlarge'
+    - 'db.m5.4xlarge'
+    - 'db.m5.8xlarge'
+    - 'db.m5.12xlarge'
+    - 'db.m5.16xlarge'
+    - 'db.m5.24xlarge'
+    - 'db.r6g.large'
+    - 'db.r6g.xlarge'
+    - 'db.r6g.2xlarge'
+    - 'db.r6g.4xlarge'
+    - 'db.r6g.8xlarge'
+    - 'db.r6g.12xlarge'
+    - 'db.r6g.16xlarge'
+    - 'db.r5.large'
+    - 'db.r5.xlarge'
+    - 'db.r5.2xlarge'
+    - 'db.r5.4xlarge'
+    - 'db.r5.8xlarge'
+    - 'db.r5.12xlarge'
+    - 'db.r5.16xlarge'
+    - 'db.r5.24xlarge'
   DBBackupRetentionPeriod:
     Description: 'The number of days to keep snapshots of the database.'
     Type: Number
@@ -182,43 +232,163 @@ Parameters:
     MaxValue: 4000
 Mappings:
   RegionMap:
+    'af-south-1':
+      AMI: 'ami-0c4d743431fd7abbf'
     'eu-north-1':
-      AMI: 'ami-006cda581cf39451b'
+      AMI: 'ami-00517306b63c4628c'
     'ap-south-1':
-      AMI: 'ami-0ce933e2ae91880d3'
+      AMI: 'ami-00bf4ae5a7909786c'
     'eu-west-3':
-      AMI: 'ami-0e9e6ba6d3d38faa8'
+      AMI: 'ami-062fdd189639d3e93'
     'eu-west-2':
-      AMI: 'ami-05f37c3995fffb4fd'
+      AMI: 'ami-03ac5a9b225e99b02'
+    'eu-south-1':
+      AMI: 'ami-0737455407c1986d6'
     'eu-west-1':
-      AMI: 'ami-01f14919ba412de34'
+      AMI: 'ami-058b1b7fe545997ae'
+    'ap-northeast-3':
+      AMI: 'ami-07420201371095f81'
     'ap-northeast-2':
-      AMI: 'ami-0d59ddf55cdda6e21'
+      AMI: 'ami-0b827f3319f7447c6'
     'me-south-1':
-      AMI: 'ami-0c55b36523aa89a7c'
+      AMI: 'ami-0e3b5e402e6d8bb6b'
     'ap-northeast-1':
-      AMI: 'ami-068a6cefc24c301d2'
+      AMI: 'ami-0b276ad63ba2d6009'
     'sa-east-1':
-      AMI: 'ami-07820a4443539a2b0'
+      AMI: 'ami-05e809fbeee38dd5e'
     'ca-central-1':
-      AMI: 'ami-0ff24797826ebbcd5'
+      AMI: 'ami-0db72f413fc1ddb2a'
     'ap-east-1':
-      AMI: 'ami-cd86fcbc'
+      AMI: 'ami-0578411ef03029669'
     'ap-southeast-1':
-      AMI: 'ami-07539a31f72d244e7'
+      AMI: 'ami-0e5182fad1edfaa68'
     'ap-southeast-2':
-      AMI: 'ami-0119aa4d67e59007c'
+      AMI: 'ami-0c9fe0dec6325a30c'
     'eu-central-1':
-      AMI: 'ami-0d4c3eabb9e72650a'
+      AMI: 'ami-00f22f6155d6d92c5'
     'us-east-1':
-      AMI: 'ami-00068cd7555f543d5'
+      AMI: 'ami-0dc2d3e4c0f9ebd18'
     'us-east-2':
-      AMI: 'ami-0dacb0c129b49f529'
+      AMI: 'ami-0233c2d874b811deb'
     'us-west-1':
-      AMI: 'ami-0b2d8d1abb76a53d8'
+      AMI: 'ami-0ed05376b59b90e46'
     'us-west-2':
-      AMI: 'ami-0c5204531f799e0c6'
+      AMI: 'ami-0dc8f589abe99f538'
+  DBServerInstanceTypeMap:
+    'db.t3.micro':
+      PerformanceInsights: false
+    'db.t3.small':
+      PerformanceInsights: false
+    'db.t3.medium':
+      PerformanceInsights: true
+    'db.t3.large':
+      PerformanceInsights: true
+    'db.t3.xlarge':
+      PerformanceInsights: true
+    'db.t3.2xlarge':
+      PerformanceInsights: true
+    'db.m6g.large':
+      PerformanceInsights: false
+    'db.m6g.xlarge':
+      PerformanceInsights: false
+    'db.m6g.2xlarge':
+      PerformanceInsights: false
+    'db.m6g.4xlarge':
+      PerformanceInsights: false
+    'db.m6g.8xlarge':
+      PerformanceInsights: false
+    'db.m6g.12xlarge':
+      PerformanceInsights: false
+    'db.m6g.16xlarge':
+      PerformanceInsights: false
+    'db.m5.large':
+      PerformanceInsights: true
+    'db.m5.xlarge':
+      PerformanceInsights: true
+    'db.m5.2xlarge':
+      PerformanceInsights: true
+    'db.m5.4xlarge':
+      PerformanceInsights: true
+    'db.m5.8xlarge':
+      PerformanceInsights: true
+    'db.m5.12xlarge':
+      PerformanceInsights: true
+    'db.m5.16xlarge':
+      PerformanceInsights: true
+    'db.m5.24xlarge':
+      PerformanceInsights: true
+    'db.r6g.large':
+      PerformanceInsights: false
+    'db.r6g.xlarge':
+      PerformanceInsights: false
+    'db.r6g.2xlarge':
+      PerformanceInsights: false
+    'db.r6g.4xlarge':
+      PerformanceInsights: false
+    'db.r6g.8xlarge':
+      PerformanceInsights: false
+    'db.r6g.12xlarge':
+      PerformanceInsights: false
+    'db.r6g.16xlarge':
+      PerformanceInsights: false
+    'db.r5.large':
+      PerformanceInsights: true
+    'db.r5.xlarge':
+      PerformanceInsights: true
+    'db.r5.2xlarge':
+      PerformanceInsights: true
+    'db.r5.4xlarge':
+      PerformanceInsights: true
+    'db.r5.8xlarge':
+      PerformanceInsights: true
+    'db.r5.12xlarge':
+      PerformanceInsights: true
+    'db.r5.16xlarge':
+      PerformanceInsights: true
+    'db.r5.24xlarge':
+      PerformanceInsights: true
+    'db.t2.micro':
+      PerformanceInsights: false
+    'db.t2.small':
+      PerformanceInsights: false
+    'db.t2.medium':
+      PerformanceInsights: true
+    'db.t2.large':
+      PerformanceInsights: true
+    'db.t2.xlarge':
+      PerformanceInsights: true
+    'db.t2.2xlarge':
+      PerformanceInsights: true
+    'db.m4.large':
+      PerformanceInsights: true
+    'db.m4.xlarge':
+      PerformanceInsights: true
+    'db.m4.2xlarge':
+      PerformanceInsights: true
+    'db.m4.4xlarge':
+      PerformanceInsights: true
+    'db.m4.10xlarge':
+      PerformanceInsights: true
+    'db.m4.16xlarge':
+      PerformanceInsights: true
+    'db.m3.medium':
+      PerformanceInsights: true
+    'db.m3.large':
+      PerformanceInsights: true
+    'db.m3.xlarge':
+      PerformanceInsights: true
+    'db.m3.2xlarge':
+      PerformanceInsights: true
+    'db.m1.small':
+      PerformanceInsights: true
+    'db.m1.medium':
+      PerformanceInsights: true
+    'db.m1.large':
+      PerformanceInsights: true
+    'db.m1.xlarge':
+      PerformanceInsights: true
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasKeyName: !Not [!Equals [!Ref WebServerKeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref WebServerIAMUserSSHAccess, 'true']
   HasSystemsManagerAccess: !Equals [!Ref WebServerSystemsManagerAccess, 'true']
@@ -234,6 +404,8 @@ Conditions:
   HasAlertTopicAndNotEFSProvisionedThroughput: !And [!Condition HasAlertTopic, !Condition HasNotEFSProvisionedThroughput]
   HasManagedPolicyArns: !Not [!Equals [!Ref ManagedPolicyArns, '']]
   HasEFSBackupRetentionPeriod: !Not [!Equals [!Ref EFSBackupRetentionPeriod, 0]]
+  HasRDSPerformanceInsights: !Equals [!FindInMap [DBServerInstanceTypeMap, !Ref DBServerInstanceType, PerformanceInsights], true]
+  HasWAF: !Not [!Equals [!Ref ParentWAFStack, '']]
 Resources:
   WebServerLogs:
     Type: 'AWS::Logs::LogGroup'
@@ -253,6 +425,15 @@ Resources:
       FromPort: 443
       ToPort: 443
       CidrIp: '0.0.0.0/0'
+  LoadBalancerSecurityGroupInWorldIPv6:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Condition: HasNotAuthProxySecurityGroup
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIpv6: '::/0'
   LoadBalancerSecurityGroupInAuthProxy:
     Type: 'AWS::EC2::SecurityGroupIngress'
     Condition: HasAuthProxySecurityGroup
@@ -422,6 +603,12 @@ Resources:
       Subnets:
       - {'Fn::ImportValue': !Sub '${ParentVPCStack}-SubnetAPublic'}
       - {'Fn::ImportValue': !Sub '${ParentVPCStack}-SubnetBPublic'}
+  WebACLAssociation:
+    Condition: HasWAF
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: {'Fn::ImportValue': !Sub '${ParentWAFStack}-WebACL'}
   DBSubnetGroup:
     Type: 'AWS::RDS::DBSubnetGroup'
     Properties:
@@ -446,6 +633,8 @@ Resources:
       DBSubnetGroupName: !Ref DBSubnetGroup
       MultiAZ: true
       StorageType: gp2
+      EnablePerformanceInsights: !If [HasRDSPerformanceInsights, true, false]
+      PerformanceInsightsRetentionPeriod: !If [HasRDSPerformanceInsights, 7, !Ref 'AWS::NoValue']
   DatabaseBurstBalanceTooLowAlarm:
     Condition: HasAlertTopic
     Type: 'AWS::CloudWatch::Alarm'
@@ -564,6 +753,7 @@ Resources:
             Service: 'ec2.amazonaws.com'
           Action: 'sts:AssumeRole'
       ManagedPolicyArns: !If [HasManagedPolicyArns, !Split [',', !Ref ManagedPolicyArns], !Ref 'AWS::NoValue']
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - !If
         - HasSystemsManagerAccess
@@ -610,8 +800,8 @@ Resources:
           - 'iam:GetSSHPublicKey'
           Resource:
           - !Sub 'arn:aws:iam::${AWS::AccountId}:user/*'
-  LaunchConfiguration:
-    Type: 'AWS::AutoScaling::LaunchConfiguration'
+  LaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
@@ -832,12 +1022,12 @@ Resources:
               'amazon-efs-utils': []
           commands:
             'a_mount':
-              command: !Sub 'mkdir /var/www && echo "${EFSFileSystem}:/ /var/www efs tls,_netdev 0 0" >> /etc/fstab && mount -a -t efs'
+              command: !Sub 'mkdir /var/www && echo "${EFSFileSystem}:/ /var/www efs tls,_netdev 0 0" >> /etc/fstab && while ! (echo > /dev/tcp/${EFSFileSystem}.efs.${AWS::Region}.amazonaws.com/2049) >/dev/null 2>&1; do sleep 5; done && mount -a -t efs'
               test: '[ ! -d /var/www ]'
         extras:
           commands:
             'a_enable_php':
-              command: 'amazon-linux-extras enable php7.2'
+              command: 'amazon-linux-extras enable php7.2 && yum -y clean metadata'
               test: "! grep -Fxq '[amzn2extra-php7.2]' /etc/yum.repos.d/amzn2-extras.repo"
         config:
           packages:
@@ -889,9 +1079,9 @@ Resources:
                   # ensure than only one machine installs wp
                   if mkdir /var/www/lock; then
                     cd /var/www/html
-                    wget -q -T 60 https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+                    wget --quiet --timeout=60 --output-document=wp-cli.phar https://github.com/wp-cli/wp-cli/releases/download/v2.5.0/wp-cli-2.5.0.phar
                     if ! php wp-cli.phar core is-installed --allow-root; then
-                      php wp-cli.phar core download --allow-root --version=5.3.2
+                      php wp-cli.phar core download --allow-root --version=5.7.2
                       php wp-cli.phar core config --dbname='wordpress' --dbuser='wordpress' --dbpass='${DBMasterUserPassword}' --dbhost='${DBHost}' --allow-root
                       php wp-cli.phar core install --url='https://${DomainName}' --title='${BlogTitle}' --admin_user='${BlogAdminUsername}' --admin_password='${BlogAdminPassword}' --admin_email='${BlogAdminEMail}' --skip-email --allow-root
                       sed -i "/$table_prefix = 'wp_';/a\$_SERVER['HTTPS'] = 'on';" /var/www/html/wp-config.php
@@ -929,19 +1119,30 @@ Resources:
                 enabled: !If [HasSystemsManagerAccess, true, false]
                 ensureRunning: !If [HasSystemsManagerAccess, true, false]
     Properties:
-      AssociatePublicIpAddress: true
-      IamInstanceProfile: !Ref WebServerInstanceProfile
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
-      InstanceType: !Ref WebServerInstanceType
-      SecurityGroups:
-      - !Ref WebServerSecurityGroup
-      KeyName: !If [HasKeyName, !Ref WebServerKeyName, !Ref 'AWS::NoValue']
-      UserData:
-        'Fn::Base64': !Sub |
-          #!/bin/bash -ex
-          trap '/opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}' ERR
-          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+      LaunchTemplateData:
+        BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            Encrypted: true
+            VolumeType: gp3
+        IamInstanceProfile:
+          Name: !Ref WebServerInstanceProfile
+        ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+        InstanceType: !Ref WebServerInstanceType
+        KeyName: !If [HasKeyName, !Ref WebServerKeyName, !Ref 'AWS::NoValue']
+        MetadataOptions:
+          HttpTokens: required
+        NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          Groups:
+          - !Ref WebServerSecurityGroup
+        UserData:
+          'Fn::Base64': !Sub |
+            #!/bin/bash -ex
+            trap '/opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}' ERR
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchTemplate --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
   AutoScalingGroup:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
     DependsOn:
@@ -950,11 +1151,13 @@ Resources:
     Properties:
       LoadBalancerNames:
       - !Ref LoadBalancer
-      LaunchConfigurationName: !Ref LaunchConfiguration
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt 'LaunchTemplate.LatestVersionNumber'
       MinSize: '2'
       MaxSize: '4'
       Cooldown: '60'
-      HealthCheckGracePeriod: 300
+      HealthCheckGracePeriod: 600 # needs to be in sync with CreationPolicy/UpdatePolicy timeout
       HealthCheckType: ELB
       NotificationConfigurations: !If
       - HasAlertTopic
@@ -1142,6 +1345,7 @@ Resources:
           Principal:
             Service: 'lambda.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
   LambdaPolicy:
     Condition: HasEFSProvisionedThroughput
     Type: 'AWS::IAM::Policy'
@@ -1163,7 +1367,7 @@ Resources:
       Code:
         ZipFile: |
           'use strict';
-          const response = require('./cfn-response');
+          const response = require('cfn-response');
           exports.handler = (event, context, cb) => {
             const throughput = parseInt(event.ResourceProperties.ThroughputInMibps, 10);
             const threshold = Math.round(throughput * 1048576 * 600 * 0.9);
@@ -1172,7 +1376,7 @@ Resources:
       Handler: 'index.handler'
       MemorySize: 128
       Role: !GetAtt 'LambdaRole.Arn'
-      Runtime: 'nodejs10.x'
+      Runtime: 'nodejs12.x'
       Timeout: 60
   LambdaLogGroup:
     Condition: HasEFSProvisionedThroughput
@@ -1202,6 +1406,18 @@ Resources:
       - SubDomainNameWithDot: !Ref SubDomainNameWithDot
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       Type: A
+  RecordSetIPv6:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2 # Magic CloudFront number
+        DNSName: !GetAtt 'CloudFrontDistribution.DomainName'
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      Name: !Sub
+      - '${SubDomainNameWithDot}${HostedZoneName}'
+      - SubDomainNameWithDot: !Ref SubDomainNameWithDot
+        HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+      Type: AAAA
   CloudFrontDistribution:
     Type: 'AWS::CloudFront::Distribution'
     Properties:
@@ -1283,6 +1499,7 @@ Resources:
           Compress: true
         Enabled: true
         HttpVersion: http2
+        IPV6Enabled: true
         PriceClass: 'PriceClass_All'
         ViewerCertificate:
           AcmCertificateArn: !Ref CloudFrontAcmCertificate
@@ -1319,6 +1536,7 @@ Resources:
           Principal:
             Service: 'backup.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: backup
         PolicyDocument:

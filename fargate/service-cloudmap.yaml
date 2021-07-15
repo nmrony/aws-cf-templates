@@ -68,10 +68,15 @@ Metadata:
       - Memory
       - SubnetsReach
       - AutoScaling
+      - Spot
       - DesiredCount
       - MaxCapacity
       - MinCapacity
       - LogsRetentionInDays
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -103,6 +108,10 @@ Parameters:
     Default: ''
   ParentSSHBastionStack:
     Description: 'Optional but recommended stack name of parent SSH bastion host/instance stack based on vpc/vpc-*-bastion.yaml template.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
     Type: String
     Default: ''
   TaskPolicies:
@@ -271,6 +280,11 @@ Parameters:
     Type: String
     Default: 'true'
     AllowedValues: ['true', 'false']
+  Spot:
+    Description: 'Run workload on spot capacity?'
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
 Mappings:
   CpuMap:
     '0.25':
@@ -347,6 +361,7 @@ Mappings:
     '30':
       Memory: 30720
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
   HasSubnetsReachPublic: !Equals [!Ref SubnetsReach, Public]
   HasAutoScaling: !Equals [!Ref AutoScaling, 'true']
@@ -369,6 +384,7 @@ Conditions:
   HasSidecarEnvironment1Key: !Not [!Equals [!Ref SidecarEnvironment1Key, '']]
   HasSidecarEnvironment2Key: !Not [!Equals [!Ref SidecarEnvironment2Key, '']]
   HasSidecarEnvironment3Key: !Not [!Equals [!Ref SidecarEnvironment3Key, '']]
+  HasSpot: !Equals [!Ref Spot, 'true']
 Resources:
   ServiceDiscovery:
     Type: 'AWS::ServiceDiscovery::Service'
@@ -395,6 +411,7 @@ Resources:
           Principal:
             Service: 'ecs-tasks.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: AmazonECSTaskExecutionRolePolicy # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html
         PolicyDocument:
@@ -421,6 +438,7 @@ Resources:
             Service: 'ecs-tasks.amazonaws.com'
           Action: 'sts:AssumeRole'
       ManagedPolicyArns: !If [HasTaskPolicies, !Split [',', !Ref TaskPolicies], !Ref 'AWS::NoValue']
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
   TaskDefinition:
     Type: 'AWS::ECS::TaskDefinition'
     Properties:
@@ -515,12 +533,18 @@ Resources:
   Service:
     Type: 'AWS::ECS::Service'
     Properties:
+      CapacityProviderStrategy:
+      - Base: 0
+        CapacityProvider: !If [HasSpot, FARGATE_SPOT, FARGATE]
+        Weight: 1
       Cluster: {'Fn::ImportValue': !Sub '${ParentClusterStack}-Cluster'}
       DeploymentConfiguration:
         MaximumPercent: 200
         MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
       DesiredCount: !Ref DesiredCount
-      LaunchType: FARGATE
       ServiceRegistries:
       - ContainerName: !If [HasProxyImage, proxy, app]
         ContainerPort: !If [HasProxyImage, !Ref ProxyPort, !Ref AppPort]
@@ -534,6 +558,7 @@ Resources:
           - !If [HasClientSecurityGroup2, {'Fn::ImportValue': !Sub '${ParentClientStack2}-ClientSecurityGroup'}, !Ref 'AWS::NoValue']
           - !If [HasClientSecurityGroup3, {'Fn::ImportValue': !Sub '${ParentClientStack3}-ClientSecurityGroup'}, !Ref 'AWS::NoValue']
           Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentVPCStack}-Subnets${SubnetsReach}'}]
+      PlatformVersion: '1.4.0'
       TaskDefinition: !Ref TaskDefinition
   CPUUtilizationTooHighAlarm:
     Condition: HasAlertTopic
@@ -584,6 +609,7 @@ Resources:
           Principal:
             Service: 'application-autoscaling.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: AmazonEC2ContainerServiceAutoscaleRole
         PolicyDocument:

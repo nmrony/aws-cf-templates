@@ -26,6 +26,7 @@ Metadata:
       - ParentAlertStack
       - ParentS3StackAccessLog
       - ParentZoneStack
+      - ParentWAFStack
     - Label:
         default: 'Domain Name and SSL certificates'
       Parameters:
@@ -64,6 +65,10 @@ Metadata:
         default: 'Load Balancer Parameters'
       Parameters:
       - LoadBalancerIdleTimeout
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -87,6 +92,14 @@ Parameters:
   ParentZoneStack:
     Description: 'Stack name of parent zone stack based on vpc/zone-*.yaml template.'
     Type: String
+  ParentWAFStack:
+    Description: 'Optional stack name of parent WAF stack based on the security/waf.yaml template.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
+    Type: String
+    Default: ''
   CloudFrontAcmCertificate:
     Description: 'The ACM Certificate ARN for the CloudFront distribution. Must be created in the us-east-1 region!'
     Type: String
@@ -182,43 +195,50 @@ Parameters:
     MaxValue: 4000
 Mappings:
   RegionMap:
+    'af-south-1':
+      AMI: 'ami-0c4d743431fd7abbf'
     'eu-north-1':
-      AMI: 'ami-006cda581cf39451b'
+      AMI: 'ami-00517306b63c4628c'
     'ap-south-1':
-      AMI: 'ami-0ce933e2ae91880d3'
+      AMI: 'ami-00bf4ae5a7909786c'
     'eu-west-3':
-      AMI: 'ami-0e9e6ba6d3d38faa8'
+      AMI: 'ami-062fdd189639d3e93'
     'eu-west-2':
-      AMI: 'ami-05f37c3995fffb4fd'
+      AMI: 'ami-03ac5a9b225e99b02'
+    'eu-south-1':
+      AMI: 'ami-0737455407c1986d6'
     'eu-west-1':
-      AMI: 'ami-01f14919ba412de34'
+      AMI: 'ami-058b1b7fe545997ae'
+    'ap-northeast-3':
+      AMI: 'ami-07420201371095f81'
     'ap-northeast-2':
-      AMI: 'ami-0d59ddf55cdda6e21'
+      AMI: 'ami-0b827f3319f7447c6'
     'me-south-1':
-      AMI: 'ami-0c55b36523aa89a7c'
+      AMI: 'ami-0e3b5e402e6d8bb6b'
     'ap-northeast-1':
-      AMI: 'ami-068a6cefc24c301d2'
+      AMI: 'ami-0b276ad63ba2d6009'
     'sa-east-1':
-      AMI: 'ami-07820a4443539a2b0'
+      AMI: 'ami-05e809fbeee38dd5e'
     'ca-central-1':
-      AMI: 'ami-0ff24797826ebbcd5'
+      AMI: 'ami-0db72f413fc1ddb2a'
     'ap-east-1':
-      AMI: 'ami-cd86fcbc'
+      AMI: 'ami-0578411ef03029669'
     'ap-southeast-1':
-      AMI: 'ami-07539a31f72d244e7'
+      AMI: 'ami-0e5182fad1edfaa68'
     'ap-southeast-2':
-      AMI: 'ami-0119aa4d67e59007c'
+      AMI: 'ami-0c9fe0dec6325a30c'
     'eu-central-1':
-      AMI: 'ami-0d4c3eabb9e72650a'
+      AMI: 'ami-00f22f6155d6d92c5'
     'us-east-1':
-      AMI: 'ami-00068cd7555f543d5'
+      AMI: 'ami-0dc2d3e4c0f9ebd18'
     'us-east-2':
-      AMI: 'ami-0dacb0c129b49f529'
+      AMI: 'ami-0233c2d874b811deb'
     'us-west-1':
-      AMI: 'ami-0b2d8d1abb76a53d8'
+      AMI: 'ami-0ed05376b59b90e46'
     'us-west-2':
-      AMI: 'ami-0c5204531f799e0c6'
+      AMI: 'ami-0dc8f589abe99f538'
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasKeyName: !Not [!Equals [!Ref WebServerKeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref WebServerIAMUserSSHAccess, 'true']
   HasSystemsManagerAccess: !Equals [!Ref WebServerSystemsManagerAccess, 'true']
@@ -234,6 +254,7 @@ Conditions:
   HasAlertTopicAndNotEFSProvisionedThroughput: !And [!Condition HasAlertTopic, !Condition HasNotEFSProvisionedThroughput]
   HasManagedPolicyArns: !Not [!Equals [!Ref ManagedPolicyArns, '']]
   HasEFSBackupRetentionPeriod: !Not [!Equals [!Ref EFSBackupRetentionPeriod, 0]]
+  HasWAF: !Not [!Equals [!Ref ParentWAFStack, '']]
 Resources:
   WebServerLogs:
     Type: 'AWS::Logs::LogGroup'
@@ -253,6 +274,15 @@ Resources:
       FromPort: 443
       ToPort: 443
       CidrIp: '0.0.0.0/0'
+  LoadBalancerSecurityGroupInWorldIPv6:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Condition: HasNotAuthProxySecurityGroup
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIpv6: '::/0'
   LoadBalancerSecurityGroupInAuthProxy:
     Type: 'AWS::EC2::SecurityGroupIngress'
     Condition: HasAuthProxySecurityGroup
@@ -384,6 +414,7 @@ Resources:
   LoadBalancer:
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
+      IpAddressType: dualstack
       LoadBalancerAttributes:
       - Key: 'idle_timeout.timeout_seconds'
         Value: !Ref LoadBalancerIdleTimeout
@@ -400,6 +431,12 @@ Resources:
       SecurityGroups:
       - !Ref LoadBalancerSecurityGroup
       Scheme: 'internet-facing'
+  WebACLAssociation:
+    Condition: HasWAF
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: {'Fn::ImportValue': !Sub '${ParentWAFStack}-WebACL'}
   LoadBalancerListener:
     Type: 'AWS::ElasticLoadBalancingV2::Listener'
     Properties:
@@ -411,6 +448,7 @@ Resources:
       Protocol: HTTPS
       Certificates:
       - CertificateArn: !Ref ElbAcmCertificate
+      SslPolicy: 'ELBSecurityPolicy-FS-1-2-Res-2019-08'
   LoadBalancerTargetGroup: # not monitored, but LoadBalancer is monitored!
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
     Properties:
@@ -581,6 +619,7 @@ Resources:
           Principal:
             Service: 'ec2.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       ManagedPolicyArns: !If [HasManagedPolicyArns, !Split [',', !Ref ManagedPolicyArns], !Ref 'AWS::NoValue']
       Policies:
       - !If
@@ -628,9 +667,9 @@ Resources:
           - 'iam:GetSSHPublicKey'
           Resource:
           - !Sub 'arn:aws:iam::${AWS::AccountId}:user/*'
-  LaunchConfiguration:
+  LaunchTemplate:
     DependsOn: [DatabaseA, DatabaseB]
-    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Type: 'AWS::EC2::LaunchTemplate'
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
@@ -851,12 +890,12 @@ Resources:
               'amazon-efs-utils': []
           commands:
             'a_mount':
-              command: !Sub 'mkdir /var/www && echo "${EFSFileSystem}:/ /var/www efs tls,_netdev 0 0" >> /etc/fstab && mount -a -t efs'
+              command: !Sub 'mkdir /var/www && echo "${EFSFileSystem}:/ /var/www efs tls,_netdev 0 0" >> /etc/fstab && while ! (echo > /dev/tcp/${EFSFileSystem}.efs.${AWS::Region}.amazonaws.com/2049) >/dev/null 2>&1; do sleep 5; done && mount -a -t efs'
               test: '[ ! -d /var/www ]'
         extras:
           commands:
             'a_enable_php':
-              command: 'amazon-linux-extras enable php7.2'
+              command: 'amazon-linux-extras enable php7.2 && yum -y clean metadata'
               test: "! grep -Fxq '[amzn2extra-php7.2]' /etc/yum.repos.d/amzn2-extras.repo"
         config:
           packages:
@@ -908,9 +947,9 @@ Resources:
                   # ensure than only one machine installs wp
                   if mkdir /var/www/lock; then
                     cd /var/www/html
-                    wget -q -T 60 https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+                    wget --quiet --timeout=60 --output-document=wp-cli.phar https://github.com/wp-cli/wp-cli/releases/download/v2.5.0/wp-cli-2.5.0.phar
                     if ! php wp-cli.phar core is-installed --allow-root; then
-                      php wp-cli.phar core download --allow-root --version=5.3.2
+                      php wp-cli.phar core download --allow-root --version=5.7.2
                       php wp-cli.phar core config --dbname='wordpress' --dbuser='wordpress' --dbpass='${DBMasterUserPassword}' --dbhost='${DBHost}' --allow-root
                       php wp-cli.phar core install --url='https://${DomainName}' --title='${BlogTitle}' --admin_user='${BlogAdminUsername}' --admin_password='${BlogAdminPassword}' --admin_email='${BlogAdminEMail}' --skip-email --allow-root
                       sed -i "/$table_prefix = 'wp_';/a\$_SERVER['HTTPS'] = 'on';" /var/www/html/wp-config.php
@@ -948,19 +987,30 @@ Resources:
                 enabled: !If [HasSystemsManagerAccess, true, false]
                 ensureRunning: !If [HasSystemsManagerAccess, true, false]
     Properties:
-      AssociatePublicIpAddress: true
-      IamInstanceProfile: !Ref WebServerInstanceProfile
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
-      InstanceType: !Ref WebServerInstanceType
-      SecurityGroups:
-      - !Ref WebServerSecurityGroup
-      KeyName: !If [HasKeyName, !Ref WebServerKeyName, !Ref 'AWS::NoValue']
-      UserData:
-        'Fn::Base64': !Sub |
-          #!/bin/bash -ex
-          trap '/opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}' ERR
-          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+      LaunchTemplateData:
+        BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            Encrypted: true
+            VolumeType: gp3
+        IamInstanceProfile:
+          Name: !Ref WebServerInstanceProfile
+        ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+        InstanceType: !Ref WebServerInstanceType
+        KeyName: !If [HasKeyName, !Ref WebServerKeyName, !Ref 'AWS::NoValue']
+        MetadataOptions:
+          HttpTokens: required
+        NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          Groups:
+          - !Ref WebServerSecurityGroup
+        UserData:
+          'Fn::Base64': !Sub |
+            #!/bin/bash -ex
+            trap '/opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}' ERR
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchTemplate --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
   AutoScalingGroup:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
     DependsOn:
@@ -970,11 +1020,13 @@ Resources:
     Properties:
       TargetGroupARNs:
       - !Ref LoadBalancerTargetGroup
-      LaunchConfigurationName: !Ref LaunchConfiguration
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt 'LaunchTemplate.LatestVersionNumber'
       MinSize: '2'
       MaxSize: '4'
       Cooldown: '60'
-      HealthCheckGracePeriod: 300
+      HealthCheckGracePeriod: 600 # needs to be in sync with CreationPolicy/UpdatePolicy timeout
       HealthCheckType: ELB
       NotificationConfigurations: !If
       - HasAlertTopic
@@ -1170,6 +1222,7 @@ Resources:
           Principal:
             Service: 'lambda.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
   LambdaPolicy:
     Condition: HasEFSProvisionedThroughput
     Type: 'AWS::IAM::Policy'
@@ -1191,7 +1244,7 @@ Resources:
       Code:
         ZipFile: |
           'use strict';
-          const response = require('./cfn-response');
+          const response = require('cfn-response');
           exports.handler = (event, context, cb) => {
             const throughput = parseInt(event.ResourceProperties.ThroughputInMibps, 10);
             const threshold = Math.round(throughput * 1048576 * 600 * 0.9);
@@ -1200,7 +1253,7 @@ Resources:
       Handler: 'index.handler'
       MemorySize: 128
       Role: !GetAtt 'LambdaRole.Arn'
-      Runtime: 'nodejs10.x'
+      Runtime: 'nodejs12.x'
       Timeout: 60
   LambdaLogGroup:
     Condition: HasEFSProvisionedThroughput
@@ -1230,6 +1283,18 @@ Resources:
       - SubDomainNameWithDot: !Ref SubDomainNameWithDot
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       Type: A
+  RecordSetIPv6:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2 # Magic CloudFront number
+        DNSName: !GetAtt 'CloudFrontDistribution.DomainName'
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      Name: !Sub
+      - '${SubDomainNameWithDot}${HostedZoneName}'
+      - SubDomainNameWithDot: !Ref SubDomainNameWithDot
+        HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+      Type: AAAA
   CloudFrontDistribution:
     Type: 'AWS::CloudFront::Distribution'
     Properties:
@@ -1311,6 +1376,7 @@ Resources:
           Compress: true
         Enabled: true
         HttpVersion: http2
+        IPV6Enabled: true
         PriceClass: 'PriceClass_All'
         ViewerCertificate:
           AcmCertificateArn: !Ref CloudFrontAcmCertificate
@@ -1347,6 +1413,7 @@ Resources:
           Principal:
             Service: 'backup.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: backup
         PolicyDocument:

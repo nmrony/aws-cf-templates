@@ -74,11 +74,16 @@ Metadata:
       - Memory
       - SubnetsReach
       - AutoScaling
+      - Spot
       - DesiredCount
       - MaxCapacity
       - MinCapacity
       - HealthCheckGracePeriod
       - LogsRetentionInDays
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -104,6 +109,10 @@ Parameters:
     Default: ''
   ParentClientStack3:
     Description: 'Optional stack name of parent Client Security Group stack based on state/client-sg.yaml template to allow network access from the service to whatever uses the client security group.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
     Type: String
     Default: ''
   LoadBalancerPriority:
@@ -312,6 +321,11 @@ Parameters:
     Default: 60
     MinValue: 0
     MaxValue: 1800
+  Spot:
+    Description: 'Run workload on spot capacity?'
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
 Mappings:
   CpuMap:
     '0.25':
@@ -388,6 +402,7 @@ Mappings:
     '30':
       Memory: 30720
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasLoadBalancerHttps: !Equals [!Ref LoadBalancerHttps, 'true']
   HasLoadBalancerPathPattern: !Not [!Equals [!Ref LoadBalancerPathPattern, '']]
   HasLoadBalancerHostPattern: !Not [!Equals [!Ref LoadBalancerHostPattern, '']]
@@ -413,6 +428,7 @@ Conditions:
   HasSidecarEnvironment1Key: !Not [!Equals [!Ref SidecarEnvironment1Key, '']]
   HasSidecarEnvironment2Key: !Not [!Equals [!Ref SidecarEnvironment2Key, '']]
   HasSidecarEnvironment3Key: !Not [!Equals [!Ref SidecarEnvironment3Key, '']]
+  HasSpot: !Equals [!Ref Spot, 'true']
 Resources:
   RecordSet:
     Condition: HasZone
@@ -427,6 +443,19 @@ Resources:
       - SubDomainNameWithDot: !Ref SubDomainNameWithDot
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       Type: A
+  RecordSetIPv6: # We can not conditionally create this only if the cluster's ALB has IPv6 turned on. Route53 does not let us query a broken AAAA record either. It just shows up as a Route53 record.
+    Condition: HasZone
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      AliasTarget:
+        HostedZoneId: {'Fn::ImportValue': !Sub '${ParentClusterStack}-CanonicalHostedZoneID'}
+        DNSName: {'Fn::ImportValue': !Sub '${ParentClusterStack}-DNSName'}
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      Name: !Sub
+      - '${SubDomainNameWithDot}${HostedZoneName}'
+      - SubDomainNameWithDot: !Ref SubDomainNameWithDot
+        HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+      Type: AAAA
   TargetGroup:
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
     Properties:
@@ -521,6 +550,7 @@ Resources:
           Principal:
             Service: 'ecs-tasks.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: AmazonECSTaskExecutionRolePolicy # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html
         PolicyDocument:
@@ -547,6 +577,7 @@ Resources:
             Service: 'ecs-tasks.amazonaws.com'
           Action: 'sts:AssumeRole'
       ManagedPolicyArns: !If [HasTaskPolicies, !Split [',', !Ref TaskPolicies], !Ref 'AWS::NoValue']
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
   TaskDefinition:
     Type: 'AWS::ECS::TaskDefinition'
     Properties:
@@ -633,13 +664,19 @@ Resources:
     DependsOn: LoadBalancerListenerRule
     Type: 'AWS::ECS::Service'
     Properties:
+      CapacityProviderStrategy:
+      - Base: 0
+        CapacityProvider: !If [HasSpot, FARGATE_SPOT, FARGATE]
+        Weight: 1
       Cluster: {'Fn::ImportValue': !Sub '${ParentClusterStack}-Cluster'}
       DeploymentConfiguration:
         MaximumPercent: 200
         MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
       DesiredCount: !Ref DesiredCount
       HealthCheckGracePeriodSeconds: !Ref HealthCheckGracePeriod
-      LaunchType: FARGATE
       LoadBalancers:
       - ContainerName: !If [HasProxyImage, proxy, app]
         ContainerPort: !If [HasProxyImage, !Ref ProxyPort, !Ref AppPort]
@@ -653,6 +690,7 @@ Resources:
           - !If [HasClientSecurityGroup2, {'Fn::ImportValue': !Sub '${ParentClientStack2}-ClientSecurityGroup'}, !Ref 'AWS::NoValue']
           - !If [HasClientSecurityGroup3, {'Fn::ImportValue': !Sub '${ParentClientStack3}-ClientSecurityGroup'}, !Ref 'AWS::NoValue']
           Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentVPCStack}-Subnets${SubnetsReach}'}]
+      PlatformVersion: '1.4.0'
       TaskDefinition: !Ref TaskDefinition
   CPUUtilizationTooHighAlarm:
     Condition: HasAlertTopic
@@ -703,6 +741,7 @@ Resources:
           Principal:
             Service: 'application-autoscaling.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: AmazonEC2ContainerServiceAutoscaleRole
         PolicyDocument:

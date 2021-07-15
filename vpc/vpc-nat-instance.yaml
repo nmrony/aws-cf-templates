@@ -35,6 +35,10 @@ Metadata:
       - LogsRetentionInDays
       - SubDomainNameWithDot
       - ManagedPolicyArns
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -49,6 +53,10 @@ Parameters:
     Default: ''
   ParentZoneStack:
     Description: 'Optional stack name of parent zone stack based on vpc/zone-*.yaml template.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
     Type: String
     Default: ''
   SubnetZone:
@@ -90,39 +98,50 @@ Parameters:
     Default: ''
 Mappings:
   RegionMap: # TODO update to Amazon Linux 2 (don't forget to adjust awslogs config as well)
-    'ap-south-1':
-      NATAMI: 'ami-00b3aa8a93dd09c13'
-    'eu-west-3':
-      NATAMI: 'ami-0641e4dfc1427f114'
+    'af-south-1':
+      NATAMI: 'ami-0317140a3200736b4'
     'eu-north-1':
-      NATAMI: 'ami-28d15f56'
+      NATAMI: 'ami-069ed80e1f0d827f3'
+    'ap-south-1':
+      NATAMI: 'ami-09aa5789180870cf6'
+    'eu-west-3':
+      NATAMI: 'ami-02735309b6cd96b8e'
     'eu-west-2':
-      NATAMI: 'ami-0ca65a55561666293'
+      NATAMI: 'ami-0c0ed76496ef320ca'
+    'eu-south-1':
+      NATAMI: 'ami-095a4c46d5b88a0a6'
     'eu-west-1':
-      NATAMI: 'ami-024107e3e3217a248'
+      NATAMI: 'ami-0b27d857cd2f43621'
+    'ap-northeast-3':
+      NATAMI: 'ami-021bfbe57db6e736b'
     'ap-northeast-2':
-      NATAMI: 'ami-0d98591cbf9ef1ffd'
+      NATAMI: 'ami-0349a552217bb9390'
+    'me-south-1':
+      NATAMI: 'ami-09ce9d8e0f5b4d5f1'
     'ap-northeast-1':
-      NATAMI: 'ami-00d29e4cb217ae06b'
+      NATAMI: 'ami-0973392a9c32dc651'
     'sa-east-1':
-      NATAMI: 'ami-057f5d52ff7ae75ae'
+      NATAMI: 'ami-03dcbf19c40d84317'
     'ca-central-1':
-      NATAMI: 'ami-0b32354309da5bba5'
+      NATAMI: 'ami-011839ac54f7a214a'
+    'ap-east-1':
+      NATAMI: 'ami-0f776aec4da2563be'
     'ap-southeast-1':
-      NATAMI: 'ami-01514bb1776d5c018'
+      NATAMI: 'ami-09de4a0d603aa5aca'
     'ap-southeast-2':
-      NATAMI: 'ami-062c04ec46aecd204'
+      NATAMI: 'ami-0a45d83c052da76ec'
     'eu-central-1':
-      NATAMI: 'ami-06a5303d47fbd8c60'
+      NATAMI: 'ami-035b2fa92d6bcb021'
     'us-east-1':
-      NATAMI: 'ami-00a9d4a05375b2763'
+      NATAMI: 'ami-018042f56926ea213'
     'us-east-2':
-      NATAMI: 'ami-00d1f8201864cc10c'
+      NATAMI: 'ami-0a920970878472c32'
     'us-west-1':
-      NATAMI: 'ami-097ad469381034fa2'
+      NATAMI: 'ami-04c8b9320df0f850c'
     'us-west-2':
-      NATAMI: 'ami-0b840e8a1ce4cdf15'
+      NATAMI: 'ami-0a4bc8a5c1ed3b5a3'
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref IAMUserSSHAccess, 'true']
   HasSSHBastionSecurityGroup: !Not [!Equals [!Ref ParentSSHBastionStack, '']]
@@ -142,7 +161,7 @@ Resources:
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       ResourceRecords:
       - !Ref EIP
-      TTL: '60'
+      TTL: 60
       Type: A
   EIP:
     Type: 'AWS::EC2::EIP'
@@ -217,6 +236,7 @@ Resources:
             Service: 'ec2.amazonaws.com'
           Action: 'sts:AssumeRole'
       ManagedPolicyArns: !If [HasManagedPolicyArns, !Split [',', !Ref ManagedPolicyArns], !Ref 'AWS::NoValue']
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: ec2
         PolicyDocument:
@@ -263,8 +283,8 @@ Resources:
           - 'iam:GetSSHPublicKey'
           Resource:
           - !Sub 'arn:aws:iam::${AWS::AccountId}:user/*'
-  NATLaunchConfiguration:
-    Type: 'AWS::AutoScaling::LaunchConfiguration'
+  LaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
@@ -425,8 +445,8 @@ Resources:
               content: !Sub |
                 [cfn-auto-reloader-hook]
                 triggers=post.update
-                path=Resources.NATLaunchConfiguration.Metadata.AWS::CloudFormation::Init
-                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=NATLaunchConfiguration
+                path=Resources.LaunchTemplate.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=LaunchTemplate
                 runas=root
           services:
             sysvinit:
@@ -437,33 +457,46 @@ Resources:
                 - '/etc/cfn/cfn-hup.conf'
                 - '/etc/cfn/hooks.d/cfn-auto-reloader.conf'
     Properties:
-      AssociatePublicIpAddress: true
-      EbsOptimized: false
-      IamInstanceProfile: !Ref NATInstanceProfile
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', NATAMI]
-      InstanceType: !Ref NATInstanceType
-      SecurityGroups:
-      - !Ref NATSecurityGroup
-      KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
-      UserData:
-        'Fn::Base64': !Sub
-        - |
-          #!/bin/bash -ex
-          trap '/opt/aws/bin/cfn-signal -e 1 --region ${Region} --stack ${StackName} --resource NATAutoScalingGroup' ERR
-          INSTANCEID=$(curl -s -m 60 http://169.254.169.254/latest/meta-data/instance-id)
-          aws --region ${Region} ec2 associate-address --instance-id $INSTANCEID --allocation-id ${EIPAllocationId}
-          aws --region ${Region} ec2 modify-instance-attribute --instance-id $INSTANCEID --source-dest-check "{\"Value\": false}"
-          aws --region ${Region} ec2 replace-route --route-table-id ${RouteTablePrivate} --destination-cidr-block "0.0.0.0/0" --instance-id $INSTANCEID || aws --region ${Region} ec2 create-route --route-table-id ${RouteTablePrivate} --destination-cidr-block "0.0.0.0/0" --instance-id $INSTANCEID
-          /opt/aws/bin/cfn-init -v --stack ${StackName} --resource NATLaunchConfiguration --region ${Region}
-          /opt/aws/bin/cfn-signal -e 0 --region ${Region} --stack ${StackName} --resource NATAutoScalingGroup
-        - RouteTablePrivate: {'Fn::ImportValue': !Sub '${ParentVPCStack}-RouteTable${SubnetZone}Private'}
-          Region: !Ref 'AWS::Region'
-          StackName: !Ref 'AWS::StackName'
-          EIPAllocationId: !GetAtt 'EIP.AllocationId'
+      LaunchTemplateData:
+        BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            Encrypted: true
+            VolumeType: gp3
+        IamInstanceProfile:
+          Name: !Ref NATInstanceProfile
+        ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', NATAMI]
+        InstanceType: !Ref NATInstanceType
+        KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
+        MetadataOptions:
+          HttpTokens: required
+        NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          Groups:
+          - !Ref NATSecurityGroup
+        UserData:
+          'Fn::Base64': !Sub
+          - |
+            #!/bin/bash -ex
+            trap '/opt/aws/bin/cfn-signal -e 1 --region ${Region} --stack ${StackName} --resource NATAutoScalingGroup' ERR
+            TOKEN=$(curl --silent --max-time 60 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 30")
+            INSTANCEID=$(curl --silent --max-time 60 -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+            aws --region ${Region} ec2 associate-address --instance-id $INSTANCEID --allocation-id ${EIPAllocationId}
+            aws --region ${Region} ec2 modify-instance-attribute --instance-id $INSTANCEID --source-dest-check "{\"Value\": false}"
+            aws --region ${Region} ec2 replace-route --route-table-id ${RouteTablePrivate} --destination-cidr-block "0.0.0.0/0" --instance-id $INSTANCEID || aws --region ${Region} ec2 create-route --route-table-id ${RouteTablePrivate} --destination-cidr-block "0.0.0.0/0" --instance-id $INSTANCEID
+            /opt/aws/bin/cfn-init -v --stack ${StackName} --resource LaunchTemplate --region ${Region}
+            /opt/aws/bin/cfn-signal -e 0 --region ${Region} --stack ${StackName} --resource NATAutoScalingGroup
+          - RouteTablePrivate: {'Fn::ImportValue': !Sub '${ParentVPCStack}-RouteTable${SubnetZone}Private'}
+            Region: !Ref 'AWS::Region'
+            StackName: !Ref 'AWS::StackName'
+            EIPAllocationId: !GetAtt 'EIP.AllocationId'
   NATAutoScalingGroup:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
     Properties:
-      LaunchConfigurationName: !Ref NATLaunchConfiguration
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt 'LaunchTemplate.LatestVersionNumber'
       MaxSize: '1'
       MinSize: '1'
       Tags:

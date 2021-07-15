@@ -26,6 +26,7 @@ Metadata:
       - ParentZoneStack
       - ParentSSHBastionStack
       - ParentAlertStack
+      - ParentSecretStack
     - Label:
         default: 'RDS Parameters'
       Parameters:
@@ -38,9 +39,12 @@ Metadata:
       - DBMasterUsername
       - DBMasterUserPassword
       - DBMultiAZ
+      - DBOptionGroupName
+      - DBParameterGroupName
       - SubDomainNameWithDot
       - PreferredBackupWindow
       - PreferredMaintenanceWindow
+      - EnableIAMDatabaseAuthentication
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -62,6 +66,10 @@ Parameters:
     Default: ''
   ParentAlertStack:
     Description: 'Optional but recommended stack name of parent alert stack based on operations/alert.yaml template.'
+    Type: String
+    Default: ''
+  ParentSecretStack:
+    Description: 'Optional Stack name of parent SecretsManager Secret Stack based on state/secretsmanager-dbsecret.yaml template.'
     Type: String
     Default: ''
   DBSnapshotIdentifier:
@@ -93,7 +101,7 @@ Parameters:
     Type: String
     Default: master
   DBMasterUserPassword:
-    Description: 'The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Description: 'The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot. Also ignored when ParentSecretStack is used).'
     Type: String
     NoEcho: true
     Default: ''
@@ -102,6 +110,14 @@ Parameters:
     Type: String
     Default: true
     AllowedValues: [true, false]
+  DBOptionGroupName:
+    Description: 'Optional name of an existing DB option group.'
+    Type: String
+    Default: ''
+  DBParameterGroupName:
+    Description: 'Optional name of an existing DB parameter group.'
+    Type: String
+    Default: ''
   SubDomainNameWithDot:
     Description: 'Name that is used to create the DNS entry with trailing dot, e.g. §{SubDomainNameWithDot}§{HostedZoneName}. Leave blank for naked (or apex and bare) domain. Requires ParentZoneStack parameter!'
     Type: String
@@ -118,15 +134,30 @@ Parameters:
     Description: 'MySQL version.'
     Type: String
     Default: '5.7.21'
-    AllowedValues: ['8.0.15', '5.7.25', '5.7.21', '5.6.41', '5.5.61'] # aws rds describe-db-engine-versions --engine mysql --query "DBEngineVersions[].EngineVersion"
+    AllowedValues: ['8.0.23', '8.0.15', '5.7.25', '5.7.21', '5.6.41', '5.5.61'] # aws rds describe-db-engine-versions --engine mysql --query "DBEngineVersions[].EngineVersion"
+  EnableIAMDatabaseAuthentication:
+    Description: 'Enable mapping of AWS Identity and Access Management (IAM) accounts to database accounts (https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/UsingWithRDS.IAMDBAuth.html).'
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
 Conditions:
+  HasSecret: !Not [!Equals [!Ref ParentSecretStack, '']]
   HasKmsKey: !Not [!Equals [!Ref ParentKmsKeyStack, '']]
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
   HasSSHBastionSecurityGroup: !Not [!Equals [!Ref ParentSSHBastionStack, '']]
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
   HasDBSnapshotIdentifier: !Not [!Equals [!Ref DBSnapshotIdentifier, '']]
+  HasDBOptionGroupName: !Not [!Equals [!Ref DBOptionGroupName, '']]
+  HasDBParameterGroupName: !Not [!Equals [!Ref DBParameterGroupName, '']]
   HasKmsKeyAndNotDBSnapshotIdentifier: !And [!Condition HasKmsKey, !Not [!Condition HasDBSnapshotIdentifier]]
 Resources:
+  SecretTargetAttachment:
+    Condition: HasSecret
+    Type: 'AWS::SecretsManager::SecretTargetAttachment'
+    Properties:
+      TargetId: !Ref DBInstance
+      SecretId: {'Fn::ImportValue': !Sub '${ParentSecretStack}-SecretArn'}
+      TargetType: 'AWS::RDS::DBInstance'
   RecordSet:
     Condition: HasZone
     Type: 'AWS::Route53::RecordSet'
@@ -138,7 +169,7 @@ Resources:
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       ResourceRecords:
       - !GetAtt 'DBInstance.Endpoint.Address'
-      TTL: '60'
+      TTL: 60
       Type: CNAME
   DatabaseSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
@@ -176,14 +207,23 @@ Resources:
       CopyTagsToSnapshot: true
       DBInstanceClass: !Ref DBInstanceClass
       DBName: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBName]
+      DBParameterGroupName: !If [HasDBParameterGroupName, !Ref DBParameterGroupName, !Ref 'AWS::NoValue']
       DBSnapshotIdentifier: !If [HasDBSnapshotIdentifier, !Ref DBSnapshotIdentifier, !Ref 'AWS::NoValue']
       DBSubnetGroupName: !Ref DBSubnetGroup
+      EnableIAMDatabaseAuthentication: !Ref EnableIAMDatabaseAuthentication
       Engine: mysql
       EngineVersion: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref EngineVersion]
       KmsKeyId: !If [HasKmsKeyAndNotDBSnapshotIdentifier, {'Fn::ImportValue': !Sub '${ParentKmsKeyStack}-KeyId'}, !Ref 'AWS::NoValue']
       MasterUsername: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBMasterUsername]
-      MasterUserPassword: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBMasterUserPassword]
+      MasterUserPassword: !If
+      - HasDBSnapshotIdentifier
+      - !Ref 'AWS::NoValue'
+      - !If
+        - HasSecret
+        - !Join ['', ['{{resolve:secretsmanager:', {'Fn::ImportValue': !Sub '${ParentSecretStack}-SecretArn'}, ':SecretString:password}}']]
+        - !Ref DBMasterUserPassword
       MultiAZ: !Ref DBMultiAZ
+      OptionGroupName: !If [HasDBOptionGroupName, !Ref DBOptionGroupName, !Ref 'AWS::NoValue']
       PreferredBackupWindow: !Ref PreferredBackupWindow
       PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
       StorageType: gp2
@@ -332,7 +372,7 @@ Resources:
       - failure
       - 'low storage'
       - maintenance
-      - notification
+      - 'read replica'
       - recovery
       SnsTopicArn: {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
       SourceIds: [!Ref DBInstance]
@@ -357,3 +397,8 @@ Outputs:
     Value: !GetAtt 'DBInstance.Endpoint.Address'
     Export:
       Name: !Sub '${AWS::StackName}-DNSName'
+  SecurityGroupId:
+    Description: 'The security group used to manage access to RDS MySQL.'
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'

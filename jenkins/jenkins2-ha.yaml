@@ -48,7 +48,12 @@ Metadata:
       - MasterInstanceType
       - MasterAdminPassword
       - MasterLogsRetentionInDays
+      - MasterVolumeSize
       - MasterLoadBalancerIdleTimeout
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -71,6 +76,10 @@ Parameters:
     Default: ''
   ParentZoneStack:
     Description: 'Optional stack name of parent zone stack based on vpc/zone-*.yaml template.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
     Type: String
     Default: ''
   KeyName:
@@ -157,43 +166,50 @@ Parameters:
     Default: 'cron(0 5 ? * * *)'
 Mappings:
   RegionMap:
+    'af-south-1':
+      AMI: 'ami-0c4d743431fd7abbf'
     'eu-north-1':
-      AMI: 'ami-006cda581cf39451b'
+      AMI: 'ami-00517306b63c4628c'
     'ap-south-1':
-      AMI: 'ami-0ce933e2ae91880d3'
+      AMI: 'ami-00bf4ae5a7909786c'
     'eu-west-3':
-      AMI: 'ami-0e9e6ba6d3d38faa8'
+      AMI: 'ami-062fdd189639d3e93'
     'eu-west-2':
-      AMI: 'ami-05f37c3995fffb4fd'
+      AMI: 'ami-03ac5a9b225e99b02'
+    'eu-south-1':
+      AMI: 'ami-0737455407c1986d6'
     'eu-west-1':
-      AMI: 'ami-01f14919ba412de34'
+      AMI: 'ami-058b1b7fe545997ae'
+    'ap-northeast-3':
+      AMI: 'ami-07420201371095f81'
     'ap-northeast-2':
-      AMI: 'ami-0d59ddf55cdda6e21'
+      AMI: 'ami-0b827f3319f7447c6'
     'me-south-1':
-      AMI: 'ami-0c55b36523aa89a7c'
+      AMI: 'ami-0e3b5e402e6d8bb6b'
     'ap-northeast-1':
-      AMI: 'ami-068a6cefc24c301d2'
+      AMI: 'ami-0b276ad63ba2d6009'
     'sa-east-1':
-      AMI: 'ami-07820a4443539a2b0'
+      AMI: 'ami-05e809fbeee38dd5e'
     'ca-central-1':
-      AMI: 'ami-0ff24797826ebbcd5'
+      AMI: 'ami-0db72f413fc1ddb2a'
     'ap-east-1':
-      AMI: 'ami-cd86fcbc'
+      AMI: 'ami-0578411ef03029669'
     'ap-southeast-1':
-      AMI: 'ami-07539a31f72d244e7'
+      AMI: 'ami-0e5182fad1edfaa68'
     'ap-southeast-2':
-      AMI: 'ami-0119aa4d67e59007c'
+      AMI: 'ami-0c9fe0dec6325a30c'
     'eu-central-1':
-      AMI: 'ami-0d4c3eabb9e72650a'
+      AMI: 'ami-00f22f6155d6d92c5'
     'us-east-1':
-      AMI: 'ami-00068cd7555f543d5'
+      AMI: 'ami-0dc2d3e4c0f9ebd18'
     'us-east-2':
-      AMI: 'ami-0dacb0c129b49f529'
+      AMI: 'ami-0233c2d874b811deb'
     'us-west-1':
-      AMI: 'ami-0b2d8d1abb76a53d8'
+      AMI: 'ami-0ed05376b59b90e46'
     'us-west-2':
-      AMI: 'ami-0c5204531f799e0c6'
+      AMI: 'ami-0dc8f589abe99f538'
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref IAMUserSSHAccess, 'true']
   HasSystemsManagerAccess: !Equals [!Ref SystemsManagerAccess, 'true']
@@ -201,10 +217,12 @@ Conditions:
   HasNotSSHBastionSecurityGroup: !Equals [!Ref ParentSSHBastionStack, '']
   HasAuthProxySecurityGroup: !Not [!Equals [!Ref ParentAuthProxyStack, '']]
   HasNotAuthProxySecurityGroup: !Equals [!Ref ParentAuthProxyStack, '']
+  HasMasterELBSchemeInternetFacing: !Equals [!Ref MasterELBScheme, 'internet-facing']
   HasMasterELBSchemeInternal: !Equals [!Ref MasterELBScheme, 'internal']
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
   HasS3Bucket: !Not [!Equals [!Ref ParentS3StackAccessLog, '']]
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
+  HasZoneAndMasterELBSchemeInternetFacing: !And [!Condition HasZone, !Condition HasMasterELBSchemeInternetFacing]
   HasManagedPolicyArns: !Not [!Equals [!Ref ManagedPolicyArns, '']]
   HasEFSProvisionedThroughput: !Not [!Condition HasNotEFSProvisionedThroughput]
   HasNotEFSProvisionedThroughput: !Equals [!Ref EFSProvisionedThroughputInMibps, '0']
@@ -310,6 +328,15 @@ Resources:
       FromPort: 80
       ToPort: 80
       CidrIp: '0.0.0.0/0'
+  MasterELBSGInWorldIPv6:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Condition: HasNotAuthProxySecurityGroup
+    Properties:
+      GroupId: !Ref MasterELBSG
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIpv6: '::/0'
   MasterELBSGInAuthProxy:
     Type: 'AWS::EC2::SecurityGroupIngress'
     Condition: HasAuthProxySecurityGroup
@@ -404,9 +431,23 @@ Resources:
       - SubDomainNameWithDot: !Ref SubDomainNameWithDot
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       Type: A
+  RecordSetIPv6:
+    Condition: HasZoneAndMasterELBSchemeInternetFacing
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      AliasTarget:
+        HostedZoneId: !GetAtt 'MasterELB.CanonicalHostedZoneID'
+        DNSName: !GetAtt 'MasterELB.DNSName'
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      Name: !Sub
+      - '${SubDomainNameWithDot}${HostedZoneName}'
+      - SubDomainNameWithDot: !Ref SubDomainNameWithDot
+        HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+      Type: AAAA
   MasterELB:
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
+      IpAddressType: !If [HasMasterELBSchemeInternal, 'ipv4', 'dualstack']
       LoadBalancerAttributes:
       - Key: 'idle_timeout.timeout_seconds'
         Value: !Ref MasterLoadBalancerIdleTimeout
@@ -437,7 +478,7 @@ Resources:
       HealthCheckProtocol: HTTP
       HealthCheckTimeoutSeconds: 25
       HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 2
+      UnhealthyThresholdCount: 10
       Matcher:
         HttpCode: '200-299'
       Port: 8080
@@ -474,6 +515,7 @@ Resources:
             Service: 'ec2.amazonaws.com'
           Action: 'sts:AssumeRole'
       ManagedPolicyArns: !If [HasManagedPolicyArns, !Split [',', !Ref ManagedPolicyArns], !Ref 'AWS::NoValue']
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - !If
         - HasSystemsManagerAccess
@@ -559,12 +601,12 @@ Resources:
     Type: 'AWS::Logs::LogGroup'
     Properties:
       RetentionInDays: !Ref MasterLogsRetentionInDays
-  MasterLC:
-    Type: 'AWS::AutoScaling::LaunchConfiguration'
+  MasterLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
-          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, mount, extras, install, setup, custom, run], [awslogs, mount, extras, install, setup, custom, run]]
+          default: [awslogs, !If [HasIAMUserSSHAccess, ssh-access, !Ref 'AWS::NoValue'], mount, extras, install, setup, custom_before, run, custom_after]
         awslogs:
           packages:
             yum:
@@ -783,20 +825,20 @@ Resources:
               command: 'adduser -u 498 -g 497 -s /bin/false -d /var/lib/jenkins -M -c ''Jenkins Continuous Integration Server'' jenkins'
               test: 'if grep -q jenkins: /etc/passwd; then exit 1; else exit 0; fi'
             'c_mount':
-              command: !Sub 'mkdir /var/lib/jenkins && chown -R jenkins:jenkins /var/lib/jenkins && echo "${MasterStorage}:/ /var/lib/jenkins efs tls,_netdev 0 0" >> /etc/fstab && mount -a -t efs'
+              command: !Sub 'mkdir /var/lib/jenkins && chown -R jenkins:jenkins /var/lib/jenkins && echo "${MasterStorage}:/ /var/lib/jenkins efs tls,_netdev 0 0" >> /etc/fstab && while ! (echo > /dev/tcp/${MasterStorage}.efs.${AWS::Region}.amazonaws.com/2049) >/dev/null 2>&1; do sleep 5; done && mount -a -t efs'
               test: '[ ! -d /var/lib/jenkins ]'
         extras:
           commands:
             'a_enable_docker':
-              command: 'amazon-linux-extras enable docker=18.06.1'
+              command: 'amazon-linux-extras enable docker=18.06.1 && yum -y clean metadata'
               test: "! grep -Fxq '[amzn2extra-docker]' /etc/yum.repos.d/amzn2-extras.repo"
             'b_enable_corretto8':
-              command: 'amazon-linux-extras enable corretto8=1.8.0_202'
+              command: 'amazon-linux-extras enable corretto8=1.8.0_202 && yum -y clean metadata'
               test: "! grep -Fxq '[amzn2extra-corretto8]' /etc/yum.repos.d/amzn2-extras.repo"
         install:
           packages:
             rpm:
-              jenkins: 'https://pkg.jenkins.io/redhat-stable/jenkins-2.204.1-1.1.noarch.rpm'
+              jenkins: 'http://ftp-chi.osuosl.org/pub/jenkins/redhat-stable/jenkins-2.289.2-1.1.noarch.rpm'
             yum:
               'java-1.8.0-amazon-corretto': []
           files:
@@ -813,8 +855,8 @@ Resources:
               content: !Sub |
                 [cfn-auto-reloader-hook]
                 triggers=post.update
-                path=Resources.MasterLC.Metadata.AWS::CloudFormation::Init
-                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=MasterLC
+                path=Resources.MasterLaunchTemplate.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=MasterLaunchTemplate
                 runas=root
           services:
             sysvinit:
@@ -829,25 +871,25 @@ Resources:
                 ensureRunning: !If [HasSystemsManagerAccess, true, false]
         setup:
           files:
-            '/root/plugins.txt':
+            '/root/plugins.txt': # list updates: java -jar /opt/jenkins-plugin-manager.jar --war /usr/lib/jenkins/jenkins.war --plugin-download-directory /var/lib/jenkins/plugins --plugin-file /root/plugins.txt --available-updates
               content: |
-                jqs-monitoring
-                ant
-                build-timeout
-                docker-workflow
-                credentials-binding
-                email-ext
-                envinject
-                github-organization-folder
-                gradle
-                workflow-aggregator
-                pipeline-maven
-                ssh-slaves
-                subversion
-                timestamper
-                ws-cleanup
-                pipeline-aws
-                http_request
+                jqs-monitoring:1.4
+                ant:1.11
+                build-timeout:1.20
+                docker-workflow:1.26
+                credentials-binding:1.26
+                email-ext:2.83
+                envinject:2.4.0
+                github-organization-folder:1.6
+                gradle:1.36
+                workflow-aggregator:2.6
+                pipeline-maven:3.10.0
+                ssh-slaves:1.32.0
+                subversion:2.14.4
+                timestamper:1.13
+                ws-cleanup:0.39
+                pipeline-aws:1.43
+                http_request:1.9.0
               mode: '000400'
               owner: root
               group: root
@@ -856,39 +898,45 @@ Resources:
               command: 'service jenkins start'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
             'b_await_jenkins':
-              command: 'until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
+              command: 'until $(curl --silent --max-time 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'c_activate_slave_agent_port':
+            'c_download_cli':
+              command: 'curl --silent --max-time 60 -o /opt/jenkins-cli.jar -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/jnlpJars/jenkins-cli.jar'
+              test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
+            'd_activate_slave_agent_port':
               command: 'sed -i -e "s@<slaveAgentPort>.*</slaveAgentPort>@<slaveAgentPort>49817</slaveAgentPort>@" /var/lib/jenkins/config.xml'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'd_set_label':
+            'e_set_label':
               command: 'sed -i -e "s@<label>.*</label>@<label>master</label>@" /var/lib/jenkins/config.xml'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'e_restart_jenkins':
+            'f_restart_jenkins':
               command: 'service jenkins restart'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'f_await_jenkins':
-              command: 'until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
+            'g_await_jenkins':
+              command: 'until $(curl --silent --max-time 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'g_install_plugins':
-              command: 'java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" install-plugin $(cat /root/plugins.txt | tr "\n" " ")'
+            'h_download_jenkins_plugin_manager':
+              command: 'wget --quiet --timeout=60 --output-document=/opt/jenkins-plugin-manager.jar https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/2.10.0/jenkins-plugin-manager-2.10.0.jar'
+              est: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
+            'i_install_plugins':
+              command: 'java -jar /opt/jenkins-plugin-manager.jar --war /usr/lib/jenkins/jenkins.war --plugin-download-directory /var/lib/jenkins/plugins --plugin-file /root/plugins.txt --latest=false'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'h_restart_jenkins':
+            'j_restart_jenkins':
               command: 'service jenkins restart'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'i_await_jenkins':
-              command: 'until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
+            'k_await_jenkins':
+              command: 'until $(curl --silent --max-time 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'j_set_admin_password':
-              command: !Sub 'echo $''jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", \''${MasterAdminPassword}\'')'' | java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" groovy ='
+            'l_set_admin_password':
+              command: !Sub 'echo $''jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", \''${MasterAdminPassword}\'')'' | java -jar /opt/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" groovy ='
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'k_stop_jenkins':
+            'm_stop_jenkins':
               command: 'service jenkins stop'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'z_create_setup_done_file':
+            'x_create_setup_done_file':
               command: 'echo "Setup done. Don not delete this file." > /var/lib/jenkins/setup_done.txt'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-        custom:
+        custom_before:
           packages:
             yum:
               git: []
@@ -913,33 +961,49 @@ Resources:
                 packages:
                   rpm:
                   - jenkins
+        custom_after:
+          commands:
+            'a_await_jenkins':
+              command: !Sub 'until $(curl --silent --max-time 60 -o /dev/null -I -f -u "admin:${MasterAdminPassword}" http://localhost:8080/cli/); do printf "."; sleep 1; done'
+              test: '[ ! -f /opt/jenkins-cli.jar ]'
+            'b_download_cli':
+              command: !Sub 'curl --silent --max-time 60 -o /opt/jenkins-cli.jar -u "admin:${MasterAdminPassword}" http://localhost:8080/jnlpJars/jenkins-cli.jar'
+              test: '[ ! -f /opt/jenkins-cli.jar ]'
     Properties:
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
-      IamInstanceProfile: !Ref MasterIP
-      InstanceType: !Ref MasterInstanceType
-      SecurityGroups:
-      - !Ref MasterSG
-      KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
-      BlockDeviceMappings:
-      - DeviceName: '/dev/xvda'
-        Ebs:
-          VolumeSize: !Ref MasterVolumeSize
-          VolumeType: gp2
-      UserData:
-        'Fn::Base64': !Sub |
-          #!/bin/bash -x
-          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource MasterLC --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource MasterASG --region ${AWS::Region}
+      LaunchTemplateData:
+        BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            Encrypted: true
+            VolumeSize: !Ref MasterVolumeSize
+            VolumeType: gp3
+        IamInstanceProfile:
+          Name: !Ref MasterIP
+        ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+        InstanceType: !Ref MasterInstanceType
+        KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
+        MetadataOptions:
+          HttpPutResponseHopLimit: 2 # allow the build to run inside Docker
+          HttpTokens: required
+        SecurityGroupIds:
+        - !Ref MasterSG
+        UserData:
+          'Fn::Base64': !Sub |
+            #!/bin/bash -x
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource MasterLaunchTemplate --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource MasterASG --region ${AWS::Region}
   MasterASG:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
     DependsOn:
     - MasterStorageMountTargetA
     - MasterStorageMountTargetB
     Properties:
-      LaunchConfigurationName: !Ref MasterLC
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MasterLaunchTemplate
+        Version: !GetAtt 'MasterLaunchTemplate.LatestVersionNumber'
       MinSize: '1'
       MaxSize: '1'
-      HealthCheckGracePeriod: 900
+      HealthCheckGracePeriod: 1800 # needs to be in sync with CreationPolicy/UpdatePolicy timeout
       HealthCheckType: ELB
       NotificationConfigurations: !If
       - HasAlertTopic
@@ -959,10 +1023,10 @@ Resources:
         PropagateAtLaunch: true
     CreationPolicy:
       ResourceSignal:
-        Timeout: PT15M
+        Timeout: PT30M
     UpdatePolicy:
       AutoScalingRollingUpdate:
-        PauseTime: PT15M
+        PauseTime: PT30M
         SuspendProcesses:
         - HealthCheck
         - ReplaceUnhealthy
@@ -998,6 +1062,7 @@ Resources:
           Principal:
             Service: 'lambda.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
   LambdaPolicy:
     Condition: HasEFSProvisionedThroughput
     Type: 'AWS::IAM::Policy'
@@ -1019,7 +1084,7 @@ Resources:
       Code:
         ZipFile: |
           'use strict';
-          const response = require('./cfn-response');
+          const response = require('cfn-response');
           exports.handler = (event, context, cb) => {
             const throughput = parseInt(event.ResourceProperties.ThroughputInMibps, 10);
             const threshold = Math.round(throughput * 1048576 * 600 * 0.9);
@@ -1028,7 +1093,7 @@ Resources:
       Handler: 'index.handler'
       MemorySize: 128
       Role: !GetAtt 'LambdaRole.Arn'
-      Runtime: 'nodejs10.x'
+      Runtime: 'nodejs12.x'
       Timeout: 60
   LambdaLogGroup:
     Condition: HasEFSProvisionedThroughput
@@ -1077,6 +1142,7 @@ Resources:
           Principal:
             Service: 'backup.amazonaws.com'
           Action: 'sts:AssumeRole'
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - PolicyName: backup
         PolicyDocument:

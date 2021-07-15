@@ -34,6 +34,7 @@ Metadata:
       - CertificateArn
       - Upstream
       - CookieSecret
+      - SkipAuthRegex
     - Label:
         default: 'EC2 Parameters'
       Parameters:
@@ -48,6 +49,10 @@ Metadata:
         default: 'Load Balancer Parameters'
       Parameters:
       - LoadBalancerIdleTimeout
+    - Label:
+        default: 'Permission Parameters'
+      Parameters:
+      - PermissionsBoundary
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -66,6 +71,10 @@ Parameters:
     Default: ''
   ParentZoneStack:
     Description: 'Optional stack name of parent zone stack based on vpc/zone-*.yaml template.'
+    Type: String
+    Default: ''
+  PermissionsBoundary:
+    Description: 'Optional ARN for a policy that will be used as the permission boundary for all roles created by this template.'
     Type: String
     Default: ''
   CertificateArn:
@@ -115,6 +124,10 @@ Parameters:
     Description: 'Seed string for secure cookies. Create one with python -c ''import os,base64; print base64.b64encode(os.urandom(16))'''
     Type: String
     NoEcho: true
+  SkipAuthRegex:
+    Description: 'Regex for path(s) which will be passed through the proxy without requiring Github authentication. The default is to require authentication for all paths.'
+    Type: String
+    Default: ''
   SubDomainNameWithDot:
     Description: 'Name that is used to create the DNS entry with trailing dot, e.g. §{SubDomainNameWithDot}§{HostedZoneName}. Leave blank for naked (or apex and bare) domain. Requires ParentZoneStack parameter!'
     Type: String
@@ -131,43 +144,50 @@ Parameters:
     MaxValue: 4000
 Mappings:
   RegionMap:
+    'af-south-1':
+      AMI: 'ami-0c4d743431fd7abbf'
     'eu-north-1':
-      AMI: 'ami-006cda581cf39451b'
+      AMI: 'ami-00517306b63c4628c'
     'ap-south-1':
-      AMI: 'ami-0ce933e2ae91880d3'
+      AMI: 'ami-00bf4ae5a7909786c'
     'eu-west-3':
-      AMI: 'ami-0e9e6ba6d3d38faa8'
+      AMI: 'ami-062fdd189639d3e93'
     'eu-west-2':
-      AMI: 'ami-05f37c3995fffb4fd'
+      AMI: 'ami-03ac5a9b225e99b02'
+    'eu-south-1':
+      AMI: 'ami-0737455407c1986d6'
     'eu-west-1':
-      AMI: 'ami-01f14919ba412de34'
+      AMI: 'ami-058b1b7fe545997ae'
+    'ap-northeast-3':
+      AMI: 'ami-07420201371095f81'
     'ap-northeast-2':
-      AMI: 'ami-0d59ddf55cdda6e21'
+      AMI: 'ami-0b827f3319f7447c6'
     'me-south-1':
-      AMI: 'ami-0c55b36523aa89a7c'
+      AMI: 'ami-0e3b5e402e6d8bb6b'
     'ap-northeast-1':
-      AMI: 'ami-068a6cefc24c301d2'
+      AMI: 'ami-0b276ad63ba2d6009'
     'sa-east-1':
-      AMI: 'ami-07820a4443539a2b0'
+      AMI: 'ami-05e809fbeee38dd5e'
     'ca-central-1':
-      AMI: 'ami-0ff24797826ebbcd5'
+      AMI: 'ami-0db72f413fc1ddb2a'
     'ap-east-1':
-      AMI: 'ami-cd86fcbc'
+      AMI: 'ami-0578411ef03029669'
     'ap-southeast-1':
-      AMI: 'ami-07539a31f72d244e7'
+      AMI: 'ami-0e5182fad1edfaa68'
     'ap-southeast-2':
-      AMI: 'ami-0119aa4d67e59007c'
+      AMI: 'ami-0c9fe0dec6325a30c'
     'eu-central-1':
-      AMI: 'ami-0d4c3eabb9e72650a'
+      AMI: 'ami-00f22f6155d6d92c5'
     'us-east-1':
-      AMI: 'ami-00068cd7555f543d5'
+      AMI: 'ami-0dc2d3e4c0f9ebd18'
     'us-east-2':
-      AMI: 'ami-0dacb0c129b49f529'
+      AMI: 'ami-0233c2d874b811deb'
     'us-west-1':
-      AMI: 'ami-0b2d8d1abb76a53d8'
+      AMI: 'ami-0ed05376b59b90e46'
     'us-west-2':
-      AMI: 'ami-0c5204531f799e0c6'
+      AMI: 'ami-0dc8f589abe99f538'
 Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundary, '']]
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref IAMUserSSHAccess, 'true']
   HasSystemsManagerAccess: !Equals [!Ref SystemsManagerAccess, 'true']
@@ -177,6 +197,7 @@ Conditions:
   HasS3Bucket: !Not [!Equals [!Ref ParentS3StackAccessLog, '']]
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
   HasManagedPolicyArns: !Not [!Equals [!Ref ManagedPolicyArns, '']]
+  HasSkipAuthRegex: !Not [!Equals [!Ref SkipAuthRegex, '']]
 Resources:
   Logs:
     Type: 'AWS::Logs::LogGroup'
@@ -193,9 +214,17 @@ Resources:
         ToPort: 80
         CidrIp: '0.0.0.0/0'
       - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIpv6: '::/0'
+      - IpProtocol: tcp
         FromPort: 443
         ToPort: 443
         CidrIp: '0.0.0.0/0'
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIpv6: '::/0'
   HTTPCodeELB5XXTooHighAlarm:
     Condition: HasAlertTopic
     Type: 'AWS::CloudWatch::Alarm'
@@ -281,9 +310,23 @@ Resources:
       - SubDomainNameWithDot: !Ref SubDomainNameWithDot
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       Type: A
+  RecordSetIPv6:
+    Condition: HasZone
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      AliasTarget:
+        HostedZoneId: !GetAtt 'LoadBalancer.CanonicalHostedZoneID'
+        DNSName: !GetAtt 'LoadBalancer.DNSName'
+      HostedZoneId: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneId'}
+      Name: !Sub
+      - '${SubDomainNameWithDot}${HostedZoneName}'
+      - SubDomainNameWithDot: !Ref SubDomainNameWithDot
+        HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
+      Type: AAAA
   LoadBalancer:
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
+      IpAddressType: dualstack
       LoadBalancerAttributes:
       - Key: 'idle_timeout.timeout_seconds'
         Value: !Ref LoadBalancerIdleTimeout
@@ -321,27 +364,6 @@ Resources:
       TargetGroupAttributes:
       - Key: 'deregistration_delay.timeout_seconds'
         Value: '30'
-  LoadBalancerTargetGroupHttpRedirect: # not monitored, but LoadBalancer is monitored!
-    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
-    Properties:
-      HealthCheckIntervalSeconds: 15
-      HealthCheckPath: '/'
-      HealthCheckPort: '80'
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 10
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 2
-      Matcher:
-        HttpCode: '200-299'
-      Port: 8080
-      Protocol: HTTP
-      Tags:
-      - Key: Name
-        Value: 'Auth proxy http redirect'
-      VpcId: {'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'}
-      TargetGroupAttributes:
-      - Key: 'deregistration_delay.timeout_seconds'
-        Value: '30'
   LoadBalancerListener:
     Type: 'AWS::ElasticLoadBalancingV2::Listener'
     Properties:
@@ -353,12 +375,16 @@ Resources:
       LoadBalancerArn: !Ref LoadBalancer
       Port: 443
       Protocol: HTTPS
+      SslPolicy: 'ELBSecurityPolicy-FS-1-2-Res-2019-08'
   LoadBalancerListenerHttpRedirect:
     Type: 'AWS::ElasticLoadBalancingV2::Listener'
     Properties:
       DefaultActions:
-      - TargetGroupArn: !Ref LoadBalancerTargetGroupHttpRedirect
-        Type: forward
+      - RedirectConfig:
+          Port: '443'
+          Protocol: HTTPS
+          StatusCode: 'HTTP_301'
+        Type: redirect
       LoadBalancerArn: !Ref LoadBalancer
       Port: 80
       Protocol: HTTP
@@ -414,6 +440,7 @@ Resources:
             Service: 'ec2.amazonaws.com'
           Action: 'sts:AssumeRole'
       ManagedPolicyArns: !If [HasManagedPolicyArns, !Split [',', !Ref ManagedPolicyArns], !Ref 'AWS::NoValue']
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundary, !Ref 'AWS::NoValue']
       Policies:
       - !If
         - HasSystemsManagerAccess
@@ -460,12 +487,12 @@ Resources:
           - 'iam:GetSSHPublicKey'
           Resource:
           - !Sub 'arn:aws:iam::${AWS::AccountId}:user/*'
-  LaunchConfiguration:
-    Type: 'AWS::AutoScaling::LaunchConfiguration'
+  LaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
     Metadata:
       'AWS::CloudFormation::Init':
         configSets:
-          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, extras, config], [awslogs, extras, config]]
+          default: !If [HasIAMUserSSHAccess, [awslogs, ssh-access, config], [awslogs, config]]
         awslogs:
           packages:
             yum:
@@ -572,20 +599,6 @@ Resources:
               mode: '000644'
               owner: root
               group: root
-            '/etc/awslogs/config/oauth2proxy.conf':
-              content: !Sub |
-                [/var/log/oauth2_proxy.log]
-                file = /var/log/oauth2_proxy.log
-                log_stream_name = {instance_id}/var/log/oauth2_proxy.log
-                log_group_name = ${Logs}
-                [/var/log/oauth2_proxy.err]
-                datetime_format = %Y/%m/%d %H:%M:%S
-                file = /var/log/oauth2_proxy.err
-                log_stream_name = {instance_id}/var/log/oauth2_proxy.err
-                log_group_name = ${Logs}
-              mode: '000644'
-              owner: root
-              group: root
           services:
             sysvinit:
               awslogsd:
@@ -597,7 +610,6 @@ Resources:
                 files:
                 - '/etc/awslogs/awslogs.conf'
                 - '/etc/awslogs/awscli.conf'
-                - '/etc/awslogs/config/oauth2proxy.conf'
         ssh-access:
           files:
             '/opt/authorized_keys_command.sh':
@@ -664,144 +676,60 @@ Resources:
                 commands:
                 - 'a_configure_sshd_command'
                 - 'b_configure_sshd_commanduser'
-        extras:
-          commands:
-            'a_enable_nginx':
-              command: 'amazon-linux-extras enable nginx1.12'
-              test: "! grep -Fxq '[amzn2extra-nginx1.12]' /etc/yum.repos.d/amzn2-extras.repo"
         config:
           users:
-            oauth2_proxy: {}
+            oauth2-proxy: {}
           sources:
-            /opt/oauth2_proxy: 'https://github.com/bitly/oauth2_proxy/releases/download/v2.2/oauth2_proxy-2.2.0.linux-amd64.go1.8.1.tar.gz'
-          packages:
-            yum:
-              nginx: []
+            '/opt/oauth2-proxy': 'https://github.com/oauth2-proxy/oauth2-proxy/releases/download/v7.1.2/oauth2-proxy-v7.1.2.linux-amd64.tar.gz'
           files:
-            '/etc/nginx/conf.d/http2https.conf':
-              content: |
-                server {
-                  listen 8080 default_server;
-                  server_name _;
-                  return 301 https://$host$request_uri;
-                }
+            '/etc/oauth2-proxy.cfg':
+              content: !Sub
+              - |
+                  ## OAuth2 Proxy Config File
+                  ## https://github.com/oauth2-proxy/oauth2-proxy
+                  http_address = "0.0.0.0:4180"
+                  upstreams = [
+                    "${Upstream}"
+                  ]
+                  ${SkipAuthRegexBlock}
+                  request_logging = false
+                  pass_basic_auth = false
+                  email_domains = [
+                    "*"
+                  ]
+                  client_id = "${GitHubClientId}"
+                  client_secret = "${GitHubClientSecret}"
+                  cookie_secret = "${CookieSecret}"
+                  provider = "github"
+                  github_org = "${GitHubOrganization}"
+              - {SkipAuthRegexBlock: !If [HasSkipAuthRegex, !Join ['', ['skip_auth_regex = ["', !Ref SkipAuthRegex, '"]']], '']}
               mode: '000644'
               owner: root
               group: root
-            '/etc/oauth2_proxy.cfg':
-              content: !Sub |
-                ## OAuth2 Proxy Config File
-                ## https://github.com/bitly/oauth2_proxy
-                http_address = "0.0.0.0:4180"
-                upstreams = [
-                  "${Upstream}"
-                ]
-                request_logging = false
-                pass_basic_auth = false
-                email_domains = [
-                  "*"
-                ]
-                client_id = "${GitHubClientId}"
-                client_secret = "${GitHubClientSecret}"
-                cookie_secret = "${CookieSecret}"
-                provider = "github"
-                github-team = "${GitHubOrganization}"
-              mode: '000644'
-              owner: root
-              group: root
-            '/etc/init.d/oauth2_proxy':
+            '/etc/systemd/system/oauth2-proxy.service':
               content: |
-                #!/bin/sh
-                ### BEGIN INIT INFO
-                # Provides:
-                # Required-Start:    $remote_fs $syslog
-                # Required-Stop:     $remote_fs $syslog
-                # Default-Start:     2 3 4 5
-                # Default-Stop:      0 1 6
-                # Short-Description: Start daemon at boot time
-                # Description:       Enable service provided by daemon.
-                ### END INIT INFO
-                dir="/opt/oauth2_proxy/oauth2_proxy-2.2.0.linux-amd64.go1.8.1"
-                cmd="./oauth2_proxy -config=/etc/oauth2_proxy.cfg"
-                user="oauth2_proxy"
-                name=`basename $0`
-                pid_file="/var/run/$name.pid"
-                stdout_log="/var/log/$name.log"
-                stderr_log="/var/log/$name.err"
-                get_pid() {
-                    cat "$pid_file"
-                }
-                is_running() {
-                    [ -f "$pid_file" ] && ps `get_pid` > /dev/null 2>&1
-                }
-                case "$1" in
-                    start)
-                    if is_running; then
-                        echo "Already started"
-                    else
-                        echo "Starting $name"
-                        cd "$dir"
-                        if [ -z "$user" ]; then
-                            sudo $cmd >> "$stdout_log" 2>> "$stderr_log" &
-                        else
-                            sudo -u "$user" $cmd >> "$stdout_log" 2>> "$stderr_log" &
-                        fi
-                        echo $! > "$pid_file"
-                        if ! is_running; then
-                            echo "Unable to start, see $stdout_log and $stderr_log"
-                            exit 1
-                        fi
-                    fi
-                    ;;
-                    stop)
-                    if is_running; then
-                        echo -n "Stopping $name.."
-                        kill `get_pid`
-                        for i in {1..10}
-                        do
-                            if ! is_running; then
-                                break
-                            fi
-                            echo -n "."
-                            sleep 1
-                        done
-                        echo
-                        if is_running; then
-                            echo "Not stopped; may still be shutting down or shutdown may have failed"
-                            exit 1
-                        else
-                            echo "Stopped"
-                            if [ -f "$pid_file" ]; then
-                                rm "$pid_file"
-                            fi
-                        fi
-                    else
-                        echo "Not running"
-                    fi
-                    ;;
-                    restart)
-                    $0 stop
-                    if is_running; then
-                        echo "Unable to stop, will not attempt to start"
-                        exit 1
-                    fi
-                    $0 start
-                    ;;
-                    status)
-                    if is_running; then
-                        echo "Running"
-                    else
-                        echo "Stopped"
-                        exit 1
-                    fi
-                    ;;
-                    *)
-                    echo "Usage: $0 {start|stop|restart|status}"
-                    exit 1
-                    ;;
-                esac
-                exit 0
-              mode: '000755'
+                # Systemd service file for oauth2-proxy daemon
+                #
+                # Date: Feb 9, 2016
+                # Author: Srdjan Grubor <sgnn7@sgnn7.org>
+
+                [Unit]
+                Description=oauth2-proxy daemon service
+                After=syslog.target network.target
+
+                [Service]
+                User=oauth2-proxy
+                Group=oauth2-proxy
+
+                ExecStart=/opt/oauth2-proxy/oauth2-proxy-v7.1.2.linux-amd64/oauth2-proxy --config=/etc/oauth2-proxy.cfg
+                ExecReload=/bin/kill -HUP $MAINPID
+
+                KillMode=process
+                Restart=always
+
+                [Install]
+                WantedBy=multi-user.target
+              mode: '000644'
               owner: root
               group: root
             '/etc/cfn/cfn-hup.conf':
@@ -817,27 +745,19 @@ Resources:
               content: !Sub |
                 [cfn-auto-reloader-hook]
                 triggers=post.update
-                path=Resources.LaunchConfiguration.Metadata.AWS::CloudFormation::Init
-                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=LaunchConfiguration
+                path=Resources.LaunchTemplate.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=LaunchTemplate
                 runas=root
           services:
             sysvinit:
-              nginx:
-                enabled: true
-                ensureRunning: true
-                packages:
-                  yum:
-                  - nginx
-                files:
-                - '/etc/nginx/conf.d/http2https.conf'
-              oauth2_proxy:
+              oauth2-proxy:
                 enabled: true
                 ensureRunning: true
                 sources:
-                - '/opt/oauth2_proxy'
+                - '/opt/oauth2-proxy'
                 files:
-                - '/etc/oauth2_proxy.cfg'
-                - '/etc/init.d/oauth2_proxy'
+                - '/etc/oauth2-proxy.cfg'
+                - '/etc/systemd/system/oauth2-proxy.service'
               cfn-hup:
                 enabled: true
                 ensureRunning: true
@@ -848,26 +768,38 @@ Resources:
                 enabled: !If [HasSystemsManagerAccess, true, false]
                 ensureRunning: !If [HasSystemsManagerAccess, true, false]
     Properties:
-      AssociatePublicIpAddress: true
-      EbsOptimized: false
-      IamInstanceProfile: !Ref InstanceProfile
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
-      InstanceType: !Ref InstanceType
-      SecurityGroups:
-      - !Ref SecurityGroup
-      KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
-      UserData:
-        'Fn::Base64': !Sub |
-          #!/bin/bash -x
-          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+      LaunchTemplateData:
+        BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            Encrypted: true
+            VolumeType: gp3
+        IamInstanceProfile:
+          Name: !Ref InstanceProfile
+        ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+        InstanceType: !Ref InstanceType
+        KeyName: !If [HasKeyName, !Ref KeyName, !Ref 'AWS::NoValue']
+        MetadataOptions:
+          HttpTokens: required
+        NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          Groups:
+          - !Ref SecurityGroup
+        UserData:
+          'Fn::Base64': !Sub |
+            #!/bin/bash -x
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchTemplate --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
   AutoScalingGroup:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
     Properties:
-      LaunchConfigurationName: !Ref LaunchConfiguration
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt 'LaunchTemplate.LatestVersionNumber'
       MaxSize: '1'
       MinSize: '1'
-      HealthCheckGracePeriod: 300
+      HealthCheckGracePeriod: 600 # needs to be in sync with CreationPolicy/UpdatePolicy timeout
       HealthCheckType: ELB
       Tags:
       - Key: Name
@@ -875,7 +807,6 @@ Resources:
         PropagateAtLaunch: true
       TargetGroupARNs:
       - !Ref LoadBalancerTargetGroup
-      - !Ref LoadBalancerTargetGroupHttpRedirect
       NotificationConfigurations: !If
       - HasAlertTopic
       - - NotificationTypes:

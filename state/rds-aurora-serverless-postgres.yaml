@@ -26,6 +26,7 @@ Metadata:
       - ParentZoneStack
       - ParentSSHBastionStack
       - ParentAlertStack
+      - ParentSecretStack
     - Label:
         default: 'RDS Parameters'
       Parameters:
@@ -38,6 +39,7 @@ Metadata:
       - SubDomainNameWithDot
       - PreferredBackupWindow
       - PreferredMaintenanceWindow
+      - EnableDataApi
     - Label:
         default: 'Serverless Parameters'
       Parameters:
@@ -72,6 +74,10 @@ Parameters:
     Description: 'Optional identifier for the DB cluster snapshot from which you want to restore (leave blank to create an empty cluster).'
     Type: String
     Default: ''
+  ParentSecretStack:
+    Description: 'Optional Stack name of parent SecretsManager Secret Stack based on state/secretsmanager-dbsecret.yaml template.'
+    Type: String
+    Default: ''
   DBName:
     Description: 'Name of the database (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
     Type: String
@@ -87,7 +93,7 @@ Parameters:
     Type: 'String'
     Default: master
   DBMasterUserPassword:
-    Description: 'The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Description: 'The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot. Also ignored when ParentSecretStack is used).'
     Type: String
     NoEcho: true
     Default: ''
@@ -103,6 +109,11 @@ Parameters:
     Description: 'IGNORED BECAUSE OF A BUG IN CLOUDFORMATION! VALUE WILL APPLY IN THE FUTURE! The weekly time range (in UTC) during which system maintenance can occur.' # TODO remove uppercase warning
     Type: String
     Default: 'sat:07:00-sat:07:30'
+  EnableDataApi:
+    Description: 'Enable the Data API (https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html).'
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
   AutoPause:
     Description: 'Enable automatic pause for a Serverless Aurora cluster. A cluster can be paused only when it has no connections. If a cluster is paused for more than seven days, the cluster might be backed up with a snapshot. In this case, the cluster is restored when there is a request to connect to it.'
     Type: String
@@ -111,12 +122,12 @@ Parameters:
   MaxCapacity:
     Description: 'The maximum capacity units for a Serverless Aurora cluster.'
     Type: String
-    AllowedValues: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+    AllowedValues: [2, 4, 8, 16, 32, 64, 192, 384]
     Default: 2
   MinCapacity:
     Description: 'The minimum capacity units for a Serverless Aurora cluster.'
     Type: String
-    AllowedValues: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+    AllowedValues: [2, 4, 8, 16, 32, 64, 192, 384]
     Default: 2
   SecondsUntilAutoPause:
     Description: 'The time, in seconds, before a Serverless Aurora cluster is paused.'
@@ -128,10 +139,12 @@ Parameters:
     Description: 'Aurora Serverless PostgreSQL version.'
     Type: String
     Default: '10.7'
-    AllowedValues: ['10.7'] # aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[?contains(SupportedEngineModes,`serverless`)]'
+    AllowedValues: ['10.7', '10.12'] # aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[?contains(SupportedEngineModes,`serverless`)]'
 Mappings:
   EngineVersionMap:
     '10.7':
+      ClusterParameterGroupFamily: 'aurora-postgresql10'
+    '10.12':
       ClusterParameterGroupFamily: 'aurora-postgresql10'
 Conditions:
   HasZone: !Not [!Equals [!Ref ParentZoneStack, '']]
@@ -139,7 +152,15 @@ Conditions:
   HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
   HasNotDBSnapshotIdentifier: !Equals [!Ref DBSnapshotIdentifier, '']
   HasDBSnapshotIdentifier: !Not [!Condition HasNotDBSnapshotIdentifier]
+  HasSecret: !Not [!Equals [!Ref ParentSecretStack, '']]
 Resources:
+  SecretTargetAttachment:
+    Condition: HasSecret
+    Type: 'AWS::SecretsManager::SecretTargetAttachment'
+    Properties:
+      TargetId: !Ref DBCluster
+      SecretId: {'Fn::ImportValue': !Sub '${ParentSecretStack}-SecretArn'}
+      TargetType: 'AWS::RDS::DBCluster'
   RecordSet:
     Condition: HasZone
     Type: 'AWS::Route53::RecordSet'
@@ -151,7 +172,7 @@ Resources:
         HostedZoneName: {'Fn::ImportValue': !Sub '${ParentZoneStack}-HostedZoneName'}
       ResourceRecords:
       - !GetAtt 'DBCluster.Endpoint.Address'
-      TTL: '60'
+      TTL: 60
       Type: CNAME
   ClusterSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
@@ -193,12 +214,19 @@ Resources:
       DatabaseName: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBName]
       DBClusterParameterGroupName: !Ref DBClusterParameterGroup
       DBSubnetGroupName: !Ref DBSubnetGroup
+      EnableHttpEndpoint: !Ref EnableDataApi
       Engine: aurora-postgresql
       EngineMode: serverless
       EngineVersion: !Ref EngineVersion
       KmsKeyId: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', {'Fn::ImportValue': !Sub '${ParentKmsKeyStack}-KeyArn'}]
       MasterUsername: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBMasterUsername]
-      MasterUserPassword: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBMasterUserPassword]
+      MasterUserPassword: !If
+      - HasDBSnapshotIdentifier
+      - !Ref 'AWS::NoValue'
+      - !If
+        - HasSecret
+        - !Join ['', ['{{resolve:secretsmanager:', {'Fn::ImportValue': !Sub '${ParentSecretStack}-SecretArn'}, ':SecretString:password}}']]
+        - !Ref DBMasterUserPassword
       # PreferredBackupWindow: !Ref PreferredBackupWindow TODO re-enable as soon as CloudFormation bug ix fixed
       # PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow TODO re-enable as soon as CloudFormation bug ix fixed
       ScalingConfiguration:
@@ -217,7 +245,7 @@ Resources:
       EventCategories:
       - failover
       - failure
-      - notification
+      - maintenance
       SnsTopicArn: {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
       SourceIds: [!Ref DBCluster]
       SourceType: 'db-cluster'
@@ -241,3 +269,8 @@ Outputs:
     Value: !GetAtt 'DBCluster.Endpoint.Address'
     Export:
       Name: !Sub '${AWS::StackName}-DNSName'
+  SecurityGroupId:
+    Description: 'The security group used to manage access to RDS Aurora Serverless Postgres.'
+    Value: !Ref ClusterSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'
